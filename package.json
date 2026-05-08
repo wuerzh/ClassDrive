@@ -1,0 +1,13 @@
+{
+  "name": "classdrive",
+  "private": true,
+  "scripts": {
+    "typecheck": "npm --prefix frontend run typecheck",
+    "test": "npm --prefix frontend test",
+    "build": "npm --prefix frontend run build",
+    "test:visual": "npm --prefix frontend run test:visual",
+    "test:visual:update": "npm --prefix frontend run test:visual:update",
+    "test:e2e": "npm --prefix frontend run test:e2e",
+    "verify:full": "node ./scripts/verify-full.mjs"
+  }
+}

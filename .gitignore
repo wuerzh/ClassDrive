@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Local toolchains and editor state
+.tooling/
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# Runtime data and local user files
+var/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Build, package, and temporary outputs
+coverage/
+frontend/dist/
+frontend/dist-ssr/
+frontend/coverage/
+frontend/tmp/
+frontend/.e2e-app/
+frontend/.manual-preview-app*/
+frontend/playwright-report/
+frontend/test-results/
+tmp/
+test-results/
+*.exe
+*.test
+*.out
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+
+# Logs and local env files
+logs/
+*.log
+*.local
+.env
+.env.*
+!.env.example
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
