@@ -8,6 +8,7 @@
     "test:visual": "npm --prefix frontend run test:visual",
     "test:visual:update": "npm --prefix frontend run test:visual:update",
     "test:e2e": "npm --prefix frontend run test:e2e",
+    "capture:readme": "npm --prefix frontend run capture:readme",
     "verify:full": "node ./scripts/verify-full.mjs"
   }
 }
