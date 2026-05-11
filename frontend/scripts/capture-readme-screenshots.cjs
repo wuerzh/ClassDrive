@@ -267,13 +267,13 @@ async function activateStudent(page, baseUrl, joinCode, studentNo, password) {
   await page.waitForURL("**/student/assignments");
 }
 
-async function submitStudentFiles(page, assignmentId, rootName, label) {
-  await page.evaluate(async ({ targetAssignmentId, targetRootName, targetLabel }) => {
+async function submitStudentFiles(page, assignmentId, rootName, label, fileCount = 3) {
+  await page.evaluate(async ({ targetAssignmentId, targetRootName, targetLabel, targetFileCount }) => {
     const files = [
       { name: "首页说明.txt", relativePath: `${targetRootName}/首页说明.txt`, content: `${targetLabel} 首页结构说明`, type: "text/plain" },
       { name: "样式说明.txt", relativePath: `${targetRootName}/样式说明.txt`, content: `${targetLabel} 配色与排版说明`, type: "text/plain" },
       { name: "提交说明.txt", relativePath: `${targetRootName}/提交说明.txt`, content: `${targetLabel} 提交说明`, type: "text/plain" },
-    ];
+    ].slice(0, targetFileCount);
     const formData = new FormData();
     for (const file of files) {
       formData.append("files", new File([file.content], file.name, { type: file.type }));
@@ -287,14 +287,38 @@ async function submitStudentFiles(page, assignmentId, rootName, label) {
     if (!response.ok) {
       throw new Error(await response.text());
     }
-  }, { targetAssignmentId: assignmentId, targetRootName: rootName, targetLabel: label });
+  }, { targetAssignmentId: assignmentId, targetRootName: rootName, targetLabel: label, targetFileCount: fileCount });
 }
 
-async function prepareStudent(browser, baseUrl, demo, student, password, rootName) {
+async function prepareStudent(browser, baseUrl, demo, student, password, rootName, fileCount = 3) {
   const { context, page } = await newPage(browser, baseUrl);
   await activateStudent(page, baseUrl, demo.joinCode, student.studentNo, password);
-  await submitStudentFiles(page, demo.assignments.main.id, rootName, student.displayName);
+  await submitStudentFiles(page, demo.assignments.main.id, rootName, student.displayName, fileCount);
   return { context, page };
+}
+
+async function selectPendingStudentDirectoryFiles(page) {
+  await page.evaluate(() => {
+    const input = document.querySelector('[data-testid="student-submission-directory-input"]');
+    if (!(input instanceof HTMLInputElement)) {
+      throw new Error("student submission directory input not found");
+    }
+    const dataTransfer = new DataTransfer();
+    const files = [
+      { name: "补充说明.txt", relativePath: "网页作品-李明/补充说明.txt", content: "补充说明：优化导航和页脚。", type: "text/plain" },
+      { name: "更新记录.txt", relativePath: "网页作品-李明/更新记录.txt", content: "更新记录：替换同名说明文件并追加素材。", type: "text/plain" },
+    ];
+    for (const item of files) {
+      const file = new File([item.content], item.name, { type: item.type });
+      Object.defineProperty(file, "webkitRelativePath", {
+        value: item.relativePath,
+        configurable: true,
+      });
+      dataTransfer.items.add(file);
+    }
+    input.files = dataTransfer.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
 }
 
 async function captureTeacherPages(page, baseUrl, demo) {
@@ -351,6 +375,10 @@ async function captureStudentPages(page, baseUrl, demo) {
   await page.goto(absoluteUrl(baseUrl, `/student/assignments/${demo.assignments.main.id}`));
   await page.getByTestId("student-assignment-current-submission").waitFor();
   await page.getByTestId("student-assignment-submission-grid").waitFor();
+  await page.getByTestId("student-submission-submit").click();
+  await page.getByTestId("student-submission-dialog").waitFor();
+  await selectPendingStudentDirectoryFiles(page);
+  await page.getByTestId("student-submission-selection").waitFor();
   await screenshot(page, "student-assignment-detail.png");
 }
 
@@ -371,7 +399,7 @@ async function main() {
 
     const firstStudent = await prepareStudent(browser, server.baseUrl, demo, demo.students[0], "student123", "网页作品-李明");
     contexts.push(firstStudent.context);
-    const secondStudent = await prepareStudent(browser, server.baseUrl, demo, demo.students[1], "student456", "网页作品-王佳");
+    const secondStudent = await prepareStudent(browser, server.baseUrl, demo, demo.students[1], "student456", "网页作品-王佳", 1);
     contexts.push(secondStudent.context);
 
     await captureTeacherPages(teacher.page, server.baseUrl, demo);
