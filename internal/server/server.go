@@ -34,35 +34,37 @@ import (
 )
 
 const (
-	sessionCookieName                  = "classdrive_session"
-	studentSessionCookieName           = "classdrive_student_session"
-	sessionDuration                    = 24 * time.Hour
-	DefaultTeacherUsername             = "admin"
-	DefaultTeacherPassword             = "demo123"
-	DefaultStudentResetPassword        = "123456"
-	classJoinCodeLen                   = 4
-	classRegistrationDuration          = 90 * time.Minute
-	preferenceRecentCopyTargets        = "recent_copy_targets"
-	studentSubmissionMaxFileSize       = 100 * 1024 * 1024
-	studentSubmissionMaxFileSizeLabel  = "100 MB"
-	assignmentSubmissionModeAny        = "any"
-	assignmentSubmissionModeFiles      = "files"
-	assignmentSubmissionModeFolder     = "folder"
-	assignmentSubmissionTypeMixed      = "mixed"
-	assignmentSubmissionTypeImage      = "image"
-	assignmentSubmissionTypeWord       = "word"
-	assignmentSubmissionTypePDF        = "pdf"
-	assignmentSubmissionTypeArchive    = "archive"
-	assignmentSubmissionReviewPending  = "pending"
-	assignmentSubmissionReviewReviewed = "reviewed"
-	defaultServerPort                  = "80"
-	tusResumableVersion                = "1.0.0"
-	editableTextFileMaxSize            = 1 * 1024 * 1024
-	teacherRoleOwner                   = "owner"
-	teacherRoleStaff                   = "staff"
-	preferenceTeacherProfileSettings   = "profile_settings"
-	defaultTeacherListPageSize         = 30
-	maxTeacherListPageSize             = 100
+	sessionCookieName                   = "classdrive_session"
+	studentSessionCookieName            = "classdrive_student_session"
+	sessionDuration                     = 24 * time.Hour
+	DefaultTeacherUsername              = "admin"
+	DefaultTeacherPassword              = "demo123"
+	DefaultStudentResetPassword         = "123456"
+	classJoinCodeLen                    = 4
+	classRegistrationDuration           = 90 * time.Minute
+	preferenceRecentCopyTargets         = "recent_copy_targets"
+	studentSubmissionMaxFileSize        = 100 * 1024 * 1024
+	studentSubmissionMaxFileSizeLabel   = "100 MB"
+	assignmentSubmissionModeAny         = "any"
+	assignmentSubmissionModeFiles       = "files"
+	assignmentSubmissionModeFolder      = "folder"
+	assignmentSubmissionTypeMixed       = "mixed"
+	assignmentSubmissionTypeImage       = "image"
+	assignmentSubmissionTypeWord        = "word"
+	assignmentSubmissionTypePDF         = "pdf"
+	assignmentSubmissionTypeArchive     = "archive"
+	assignmentSubmissionStatusPartial   = "partial"
+	assignmentSubmissionStatusSubmitted = "submitted"
+	assignmentSubmissionReviewPending   = "pending"
+	assignmentSubmissionReviewReviewed  = "reviewed"
+	defaultServerPort                   = "80"
+	tusResumableVersion                 = "1.0.0"
+	editableTextFileMaxSize             = 1 * 1024 * 1024
+	teacherRoleOwner                    = "owner"
+	teacherRoleStaff                    = "staff"
+	preferenceTeacherProfileSettings    = "profile_settings"
+	defaultTeacherListPageSize          = 30
+	maxTeacherListPageSize              = 100
 )
 
 var studentSubmissionAllowedExtensions = []string{".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".jpg", ".jpeg", ".png", ".zip", ".rar", ".7z"}
@@ -673,8 +675,8 @@ type updateAssignmentSubmissionReviewRequest struct {
 }
 
 type studentSubmissionResult struct {
-	Submission assignmentSubmissionSummary `json:"submission"`
-	Items      []fileSummary               `json:"items"`
+	Submission *assignmentSubmissionSummary `json:"submission"`
+	Items      []fileSummary                `json:"items"`
 }
 
 type studentResult struct {
@@ -1230,6 +1232,22 @@ func (app *App) handleStudentAssignmentByID(writer http.ResponseWriter, request 
 			return
 		}
 		app.serveSubmissionEntryDownload(writer, request, entry)
+	case len(parts) == 4 && parts[1] == "submission" && parts[2] == "files":
+		if request.Method != http.MethodDelete {
+			app.writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "不支持的请求方法")
+			return
+		}
+		fileID, err := strconv.ParseInt(parts[3], 10, 64)
+		if err != nil || fileID <= 0 {
+			app.writeError(writer, http.StatusNotFound, "not_found", "附件不存在")
+			return
+		}
+		result, err := app.deleteStudentSubmissionFile(assignmentID, student, fileID)
+		if err != nil {
+			app.writeDomainError(writer, err)
+			return
+		}
+		app.writeJSON(writer, http.StatusOK, result)
 	default:
 		app.writeError(writer, http.StatusNotFound, "not_found", "作业不存在")
 	}
@@ -3478,8 +3496,7 @@ func validateStudentSubmissionRule(assignment assignmentSummary, headers []*mult
 	if err != nil {
 		return domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
 	}
-	minFileCount, err := validateAssignmentMinFileCount(assignment.MinFileCount)
-	if err != nil {
+	if _, err := validateAssignmentMinFileCount(assignment.MinFileCount); err != nil {
 		return domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
 	}
 
@@ -3514,9 +3531,6 @@ func validateStudentSubmissionRule(assignment assignmentSummary, headers []*mult
 		}
 	}
 
-	if len(headers) < minFileCount {
-		return domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: fmt.Sprintf("至少提交 %d 个文件", minFileCount)}
-	}
 	return nil
 }
 
@@ -5257,7 +5271,7 @@ where assignment_id in (select id from assignments where class_id = ?)`, classID
 	}
 
 	for _, dir := range []string{classDir, assignmentDir, submissionDir} {
-		if err := os.RemoveAll(dir); err != nil {
+		if err := removeFileTree(dir); err != nil {
 			return err
 		}
 	}
@@ -5644,7 +5658,7 @@ func (app *App) deleteAssignment(assignmentID, classID int64) error {
 	}
 	attachmentParentPath := assignmentAttachmentParentPath(assignmentID)
 	attachmentDir := filepath.Join(attachmentsBaseDir, filepath.FromSlash(strings.TrimPrefix(attachmentParentPath, "/")))
-	if err := os.RemoveAll(attachmentDir); err != nil {
+	if err := removeFileTree(attachmentDir); err != nil {
 		return err
 	}
 
@@ -6324,7 +6338,12 @@ func (app *App) buildAssignmentSubmissionsArchive(classID int64, assignmentIDs [
 		_ = archive.Close()
 		return nil, "", err
 	}
-	missingRows, err := app.buildAssignmentSubmissionMissingArchiveRows(classID, assignments, assignmentFolders, submittedStudents)
+	partialStudents, err := app.buildAssignmentSubmissionPartialStudents(classID, assignments)
+	if err != nil {
+		_ = archive.Close()
+		return nil, "", err
+	}
+	missingRows, err := app.buildAssignmentSubmissionMissingArchiveRows(classID, assignments, assignmentFolders, submittedStudents, partialStudents)
 	if err != nil {
 		_ = archive.Close()
 		return nil, "", err
@@ -6369,10 +6388,11 @@ select s.id, s.assignment_id, st.id, st.student_no, st.display_name, s.submitted
 from assignment_submissions s
 join students st on st.id = s.student_id
 where st.class_id = ? and s.assignment_id in (`+strings.Join(ids, ",")+`)
+  and s.status = 'submitted'
 order by s.assignment_id asc, st.student_no asc, st.display_name asc`, args...)
 }
 
-func (app *App) buildAssignmentSubmissionMissingArchiveRows(classID int64, assignments []assignmentSummary, assignmentFolders map[int64]string, submittedStudents map[int64]map[int64]struct{}) ([]assignmentSubmissionMissingArchiveRow, error) {
+func (app *App) buildAssignmentSubmissionMissingArchiveRows(classID int64, assignments []assignmentSummary, assignmentFolders map[int64]string, submittedStudents map[int64]map[int64]struct{}, partialStudents map[int64]map[int64]struct{}) ([]assignmentSubmissionMissingArchiveRow, error) {
 	students, err := app.listArchiveStudents(classID)
 	if err != nil {
 		return nil, err
@@ -6387,15 +6407,57 @@ func (app *App) buildAssignmentSubmissionMissingArchiveRows(classID int64, assig
 					continue
 				}
 			}
+			status := "未提交"
+			if partialForAssignment := partialStudents[assignment.ID]; partialForAssignment != nil {
+				if _, exists := partialForAssignment[student.ID]; exists {
+					status = "待补齐"
+				}
+			}
 			rows = append(rows, assignmentSubmissionMissingArchiveRow{
 				AssignmentTitle: assignmentFolder,
 				StudentNo:       student.StudentNo,
 				DisplayName:     student.DisplayName,
-				Status:          "未提交",
+				Status:          status,
 			})
 		}
 	}
 	return rows, nil
+}
+
+func (app *App) buildAssignmentSubmissionPartialStudents(classID int64, assignments []assignmentSummary) (map[int64]map[int64]struct{}, error) {
+	if len(assignments) == 0 {
+		return map[int64]map[int64]struct{}{}, nil
+	}
+	ids := make([]string, 0, len(assignments))
+	args := []any{classID}
+	for _, assignment := range assignments {
+		ids = append(ids, "?")
+		args = append(args, assignment.ID)
+	}
+	rows, err := app.db.Query(`
+select s.assignment_id, s.student_id
+from assignment_submissions s
+join students st on st.id = s.student_id
+where st.class_id = ? and s.status = 'partial' and s.assignment_id in (`+strings.Join(ids, ",")+`)
+order by s.assignment_id asc, st.student_no asc, st.id asc`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[int64]map[int64]struct{}, len(assignments))
+	for rows.Next() {
+		var assignmentID int64
+		var studentID int64
+		if err := rows.Scan(&assignmentID, &studentID); err != nil {
+			return nil, err
+		}
+		if _, exists := result[assignmentID]; !exists {
+			result[assignmentID] = make(map[int64]struct{})
+		}
+		result[assignmentID][studentID] = struct{}{}
+	}
+	return result, rows.Err()
 }
 
 func (app *App) listArchiveStudents(classID int64) ([]studentResult, error) {
@@ -6737,6 +6799,11 @@ func (app *App) submitStudentAssignment(assignmentID int64, student studentRecor
 	if err != nil {
 		return nil, err
 	}
+	if submission != nil {
+		if err := app.validateExistingSubmissionUploadRoot(*assignment, submission.ID, student.ClassID, headers, relativePaths); err != nil {
+			return nil, err
+		}
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if submission == nil {
 		result, err := app.db.Exec(`
@@ -6744,8 +6811,8 @@ insert into assignment_submissions (assignment_id, student_id, status, submitted
 values (?, ?, ?, ?, ?, ?, ?)`,
 			assignmentID,
 			student.ID,
-			"submitted",
-			now,
+			assignmentSubmissionStatusPartial,
+			"",
 			now,
 			assignmentSubmissionReviewPending,
 			"",
@@ -6761,43 +6828,25 @@ values (?, ?, ?, ?, ?, ?, ?)`,
 			ID:             submissionID,
 			AssignmentID:   assignmentID,
 			StudentID:      student.ID,
-			Status:         "submitted",
-			SubmittedAt:    now,
+			Status:         assignmentSubmissionStatusPartial,
+			SubmittedAt:    "",
 			UpdatedAt:      now,
 			ReviewStatus:   assignmentSubmissionReviewPending,
 			TeacherComment: "",
 			ReviewedAt:     "",
 			ReviewerName:   "",
 		}
-	} else {
-		if err := app.deleteSubmissionFiles(submission.ID, student.ClassID); err != nil {
-			return nil, err
-		}
-		if _, err := app.db.Exec(`update assignment_submissions set status = ?, updated_at = ?, review_status = ?, teacher_comment = ?, reviewed_at = ?, reviewer_name = ? where id = ?`, "submitted", now, assignmentSubmissionReviewPending, "", "", "", submission.ID); err != nil {
-			return nil, err
-		}
-		submission.Status = "submitted"
-		submission.UpdatedAt = now
-		submission.ReviewStatus = assignmentSubmissionReviewPending
-		submission.TeacherComment = ""
-		submission.ReviewedAt = ""
-		submission.ReviewerName = ""
 	}
 
 	parentPath := assignmentSubmissionParentPath(submission.ID)
-	items := make([]fileSummary, 0, len(headers))
-	rootReplacements := make(map[string]*string)
 	for index, header := range headers {
 		relativePath := ""
 		if index < len(relativePaths) {
 			relativePath = relativePaths[index]
 		}
-		targetParentPath, targetName, action, resolveErr := app.resolveUploadTarget("submission", optionalInt64(student.ClassID), parentPath, header.Filename, relativePath, uploadConflictModeReplace, rootReplacements)
+		targetParentPath, targetName, resolveErr := app.resolveSubmissionUploadTarget(student.ClassID, parentPath, header.Filename, relativePath)
 		if resolveErr != nil {
 			return nil, resolveErr
-		}
-		if action == uploadActionSkipped {
-			continue
 		}
 		file, err := header.Open()
 		if err != nil {
@@ -6808,22 +6857,203 @@ values (?, ?, ?, ?, ?, ?, ?)`,
 		if createErr != nil {
 			return nil, createErr
 		}
-		if entry != nil && entry.ParentPath == parentPath {
-			items = append(items, app.buildStudentSubmissionFileSummary(assignmentID, *entry))
-		}
+		_ = entry
 	}
-	if len(items) == 0 {
-		var listErr error
-		items, listErr = app.listSubmissionFiles(assignmentID, submission.ID, student.ClassID)
-		if listErr != nil {
-			return nil, listErr
-		}
+
+	fileCount, err := app.countSubmissionFiles(submission.ID, student.ClassID)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := app.updateAssignmentSubmissionAfterFileMutation(*assignment, submission, fileCount, now)
+	if err != nil {
+		return nil, err
+	}
+	items, err := app.listSubmissionFiles(assignmentID, submission.ID, student.ClassID)
+	if err != nil {
+		return nil, err
 	}
 
 	return &studentSubmissionResult{
-		Submission: submission.toSummary(),
+		Submission: summary,
 		Items:      items,
 	}, nil
+}
+
+func (app *App) validateExistingSubmissionUploadRoot(assignment assignmentSummary, submissionID, classID int64, headers []*multipart.FileHeader, relativePaths []string) error {
+	mode, err := normalizeAssignmentSubmissionMode(assignment.SubmissionMode)
+	if err != nil {
+		return domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
+	}
+	if mode != assignmentSubmissionModeFolder {
+		return nil
+	}
+	uploadRoot, err := folderSubmissionUploadRoot(headers, relativePaths)
+	if err != nil {
+		return err
+	}
+	if uploadRoot == "" {
+		return nil
+	}
+	existingRoot, err := app.currentSubmissionRootName(submissionID, classID)
+	if err != nil {
+		return err
+	}
+	if existingRoot != "" && existingRoot != uploadRoot {
+		return domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "本次作业只能提交一个文件夹，请继续补充当前提交文件夹"}
+	}
+	return nil
+}
+
+func folderSubmissionUploadRoot(headers []*multipart.FileHeader, relativePaths []string) (string, error) {
+	for index := range headers {
+		segments, err := submissionRelativePathSegments(index, relativePaths)
+		if err != nil {
+			return "", err
+		}
+		if len(segments) >= 2 {
+			return segments[0], nil
+		}
+	}
+	return "", nil
+}
+
+func (app *App) currentSubmissionRootName(submissionID, classID int64) (string, error) {
+	entries, err := app.listFileEntries("submission", optionalInt64(classID), assignmentSubmissionParentPath(submissionID))
+	if err != nil {
+		return "", err
+	}
+	if len(entries) == 0 {
+		return "", nil
+	}
+	return entries[0].Name, nil
+}
+
+func (app *App) deleteStudentSubmissionFile(assignmentID int64, student studentRecord, fileID int64) (*studentSubmissionResult, error) {
+	assignment, err := app.findVisibleStudentAssignmentByID(assignmentID, student.ClassID)
+	if err != nil {
+		return nil, err
+	}
+	if assignmentIsOverdue(assignment.DueAt, time.Now().UTC()) {
+		return nil, domainError{Status: http.StatusConflict, Code: "conflict", Message: "当前作业已截止，不能再修改提交"}
+	}
+	submission, err := app.findAssignmentSubmissionByAssignmentAndStudent(assignmentID, student.ID)
+	if err != nil {
+		return nil, err
+	}
+	if submission == nil {
+		return nil, domainError{Status: http.StatusNotFound, Code: "not_found", Message: "附件不存在"}
+	}
+	entry, err := app.findStudentSubmissionFileByID(assignmentID, student, fileID)
+	if err != nil {
+		return nil, err
+	}
+	if err := app.deleteEntry(entry.ID); err != nil {
+		return nil, err
+	}
+
+	fileCount, err := app.countSubmissionFiles(submission.ID, student.ClassID)
+	if err != nil {
+		return nil, err
+	}
+	if fileCount == 0 {
+		if err := app.removeSubmissionDirectory(submission.ID, student.ClassID); err != nil {
+			return nil, err
+		}
+		if _, err := app.db.Exec(`delete from assignment_submissions where id = ?`, submission.ID); err != nil {
+			return nil, err
+		}
+		return &studentSubmissionResult{
+			Submission: nil,
+			Items:      []fileSummary{},
+		}, nil
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	summary, err := app.updateAssignmentSubmissionAfterFileMutation(*assignment, submission, fileCount, now)
+	if err != nil {
+		return nil, err
+	}
+	items, err := app.listSubmissionFiles(assignmentID, submission.ID, student.ClassID)
+	if err != nil {
+		return nil, err
+	}
+	return &studentSubmissionResult{
+		Submission: summary,
+		Items:      items,
+	}, nil
+}
+
+func (app *App) resolveSubmissionUploadTarget(classID int64, parentPath, fallbackName, relativePath string) (string, string, error) {
+	normalizedParentPath, err := normalizeRelativePath(parentPath)
+	if err != nil {
+		return "", "", domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
+	}
+	segments, err := normalizeUploadRelativePath(relativePath)
+	if err != nil {
+		return "", "", err
+	}
+	if len(segments) == 0 {
+		return normalizedParentPath, fallbackName, app.ensureDirectoryHierarchy("submission", optionalInt64(classID), normalizedParentPath)
+	}
+
+	targetName := segments[len(segments)-1]
+	targetParentPath := normalizedParentPath
+	if len(segments) > 1 {
+		targetParentPath = joinChild(normalizedParentPath, path.Join(segments[:len(segments)-1]...))
+	}
+	if err := app.ensureDirectoryHierarchy("submission", optionalInt64(classID), targetParentPath); err != nil {
+		return "", "", err
+	}
+	return targetParentPath, targetName, nil
+}
+
+func (app *App) updateAssignmentSubmissionAfterFileMutation(assignment assignmentSummary, submission *assignmentSubmissionRecord, fileCount int, now string) (*assignmentSubmissionSummary, error) {
+	status, err := assignmentSubmissionStatusForFileCount(assignment, fileCount)
+	if err != nil {
+		return nil, err
+	}
+	submittedAt := submission.SubmittedAt
+	if status == assignmentSubmissionStatusSubmitted && submittedAt == "" {
+		submittedAt = now
+	}
+	if status == assignmentSubmissionStatusPartial {
+		submittedAt = ""
+	}
+	if _, err := app.db.Exec(`
+update assignment_submissions
+set status = ?, submitted_at = ?, updated_at = ?, review_status = ?, teacher_comment = ?, reviewed_at = ?, reviewer_name = ?
+where id = ?`,
+		status,
+		submittedAt,
+		now,
+		assignmentSubmissionReviewPending,
+		"",
+		"",
+		"",
+		submission.ID,
+	); err != nil {
+		return nil, err
+	}
+	submission.Status = status
+	submission.SubmittedAt = submittedAt
+	submission.UpdatedAt = now
+	submission.ReviewStatus = assignmentSubmissionReviewPending
+	submission.TeacherComment = ""
+	submission.ReviewedAt = ""
+	submission.ReviewerName = ""
+	summary := submission.toSummary()
+	return &summary, nil
+}
+
+func assignmentSubmissionStatusForFileCount(assignment assignmentSummary, fileCount int) (string, error) {
+	minFileCount, err := validateAssignmentMinFileCount(assignment.MinFileCount)
+	if err != nil {
+		return "", domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
+	}
+	if fileCount >= minFileCount {
+		return assignmentSubmissionStatusSubmitted, nil
+	}
+	return assignmentSubmissionStatusPartial, nil
 }
 
 func (app *App) findStudentSubmissionFileByID(assignmentID int64, student studentRecord, fileID int64) (*fileEntry, error) {
@@ -7665,17 +7895,40 @@ func (app *App) listSubmissionFiles(assignmentID, submissionID, classID int64) (
 	return items, nil
 }
 
-func (app *App) deleteSubmissionFiles(submissionID, classID int64) error {
+func (app *App) countSubmissionFiles(submissionID, classID int64) (int, error) {
+	parentPath := assignmentSubmissionParentPath(submissionID)
+	var count int
+	if err := app.db.QueryRow(`
+select count(*)
+from file_entries
+where space = 'submission'
+  and class_id = ?
+  and kind = 'file'
+  and item_path like ?`,
+		classID,
+		parentPath+"/%",
+	).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (app *App) removeSubmissionDirectory(submissionID, classID int64) error {
 	baseDir, _, err := app.storageDir("submission", optionalInt64(classID))
 	if err != nil {
 		return err
 	}
 	parentPath := assignmentSubmissionParentPath(submissionID)
 	submissionDir := filepath.Join(baseDir, filepath.FromSlash(strings.TrimPrefix(parentPath, "/")))
-	if err := os.RemoveAll(submissionDir); err != nil {
+	return removeFileTree(submissionDir)
+}
+
+func (app *App) deleteSubmissionFiles(submissionID, classID int64) error {
+	parentPath := assignmentSubmissionParentPath(submissionID)
+	if err := app.removeSubmissionDirectory(submissionID, classID); err != nil {
 		return err
 	}
-	_, err = app.db.Exec(`
+	_, err := app.db.Exec(`
 delete from file_entries
 where space = 'submission' and class_id = ? and (parent_path = ? or item_path like ?)`,
 		classID,

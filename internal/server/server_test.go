@@ -125,8 +125,8 @@ type studentAssignmentsResponse struct {
 }
 
 type studentSubmissionResponse struct {
-	Submission studentSubmissionPayload `json:"submission"`
-	Items      []fileSummary            `json:"items"`
+	Submission *studentSubmissionPayload `json:"submission"`
+	Items      []fileSummary             `json:"items"`
 }
 
 type teacherAssignmentSubmissionPayload struct {
@@ -1808,7 +1808,7 @@ func TestStudentFileAccessIsReadOnly(t *testing.T) {
 	}
 }
 
-func TestStudentSubmissionCreateOverwriteAndDeadlineGuard(t *testing.T) {
+func TestStudentSubmissionCreateIncrementalAndDeadlineGuard(t *testing.T) {
 	t.Parallel()
 
 	baseDir, app := newTestServer(t)
@@ -1842,7 +1842,7 @@ func TestStudentSubmissionCreateOverwriteAndDeadlineGuard(t *testing.T) {
 
 	var firstPayload studentSubmissionResponse
 	decodeJSON(t, firstRecorder.Body, &firstPayload)
-	if firstPayload.Submission.Status != "submitted" || len(firstPayload.Items) != 1 || firstPayload.Items[0].Name != "first.txt" {
+	if firstPayload.Submission == nil || firstPayload.Submission.Status != "submitted" || len(firstPayload.Items) != 1 || firstPayload.Items[0].Name != "first.txt" {
 		t.Fatalf("unexpected first submission payload %#v", firstPayload)
 	}
 	if countSubmissionFileEntries(t, app.db, firstPayload.Submission.ID, 1) != 1 {
@@ -1882,14 +1882,17 @@ func TestStudentSubmissionCreateOverwriteAndDeadlineGuard(t *testing.T) {
 
 	var secondPayload studentSubmissionResponse
 	decodeJSON(t, secondRecorder.Body, &secondPayload)
-	if secondPayload.Submission.ID != firstPayload.Submission.ID {
-		t.Fatalf("expected overwrite to reuse submission id, got first=%d second=%d", firstPayload.Submission.ID, secondPayload.Submission.ID)
+	if secondPayload.Submission == nil || secondPayload.Submission.ID != firstPayload.Submission.ID {
+		t.Fatalf("expected incremental submit to reuse submission id, got first=%d second=%#v", firstPayload.Submission.ID, secondPayload.Submission)
 	}
-	if len(secondPayload.Items) != 1 || secondPayload.Items[0].Name != "second.txt" {
-		t.Fatalf("unexpected overwrite payload %#v", secondPayload)
+	if len(secondPayload.Items) != 2 {
+		t.Fatalf("expected incremental payload to keep previous file, got %#v", secondPayload)
 	}
-	if countSubmissionFileEntries(t, app.db, secondPayload.Submission.ID, 1) != 1 {
-		t.Fatalf("expected 1 submission file entry after overwrite")
+	if secondPayload.Items[0].Name != "first.txt" || secondPayload.Items[1].Name != "second.txt" {
+		t.Fatalf("expected first and second files after incremental submit, got %#v", secondPayload.Items)
+	}
+	if countSubmissionFileEntries(t, app.db, secondPayload.Submission.ID, 1) != 2 {
+		t.Fatalf("expected 2 submission file entries after incremental submit")
 	}
 	if countSubmissionsByAssignmentAndStudent(t, app.db, published.ID, currentStudent.ID) != 1 {
 		t.Fatalf("expected only one current submission row")
@@ -1914,6 +1917,196 @@ func TestStudentSubmissionCreateOverwriteAndDeadlineGuard(t *testing.T) {
 	app.ServeHTTP(expiredRecorder, expiredRequest)
 	if expiredRecorder.Code != http.StatusConflict {
 		t.Fatalf("expected deadline guard 409, got %d: %s", expiredRecorder.Code, expiredRecorder.Body.String())
+	}
+}
+
+func TestStudentSubmissionIncrementalPartialAndDeleteFlow(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	prepareStudentAuthFixture(t, app, "ABCD1234", "20260001", "张小明")
+	studentCookie := activateAndLoginStudent(t, app, "ABCD1234", "20260001", "student123")
+	currentStudent, err := app.findStudentByClassAndNo(1, "20260001")
+	if err != nil || currentStudent == nil {
+		t.Fatalf("find current student: %v, student=%#v", err, currentStudent)
+	}
+
+	assignment, err := app.createAssignment(createAssignmentRequest{
+		ClassID:        1,
+		Title:          "分次提交作业",
+		Description:    "允许学生做完一个交一个",
+		DueAt:          time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339),
+		Status:         "published",
+		SubmissionMode: "files",
+		MinFileCount:   3,
+	})
+	if err != nil {
+		t.Fatalf("create assignment: %v", err)
+	}
+
+	submitFiles := func(files []multipartFileSpec) studentSubmissionResponse {
+		t.Helper()
+		body, contentType := multipartFilesBody(t, map[string]string{}, files)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/api/student/assignments/"+itoa(assignment.ID)+"/submission", body)
+		request.Header.Set("Content-Type", contentType)
+		request.AddCookie(studentCookie)
+		app.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected submission 200, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		var payload studentSubmissionResponse
+		decodeJSON(t, recorder.Body, &payload)
+		return payload
+	}
+	itemByName := func(items []fileSummary, name string) fileSummary {
+		t.Helper()
+		for _, item := range items {
+			if item.Name == name {
+				return item
+			}
+		}
+		t.Fatalf("expected item %q in %#v", name, items)
+		return fileSummary{}
+	}
+	deleteSubmissionFile := func(fileID int64) studentSubmissionResponse {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodDelete, "/api/student/assignments/"+itoa(assignment.ID)+"/submission/files/"+itoa(fileID), nil)
+		request.AddCookie(studentCookie)
+		app.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected delete submission file 200, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		var payload studentSubmissionResponse
+		decodeJSON(t, recorder.Body, &payload)
+		return payload
+	}
+
+	firstPayload := submitFiles([]multipartFileSpec{{
+		FieldName: "files",
+		FileName:  "first.txt",
+		Contents:  []byte("first version"),
+	}})
+	if firstPayload.Submission == nil || firstPayload.Submission.Status != "partial" || len(firstPayload.Items) != 1 || firstPayload.Items[0].Name != "first.txt" {
+		t.Fatalf("expected partial first submission with one file, got %#v", firstPayload)
+	}
+	if countSubmissionsByAssignmentAndStudent(t, app.db, assignment.ID, currentStudent.ID) != 1 {
+		t.Fatalf("expected one submission row after partial save")
+	}
+
+	statsAfterPartial, err := app.buildAssignmentStatistics(1, []int64{assignment.ID})
+	if err != nil {
+		t.Fatalf("build stats after partial: %v", err)
+	}
+	if statsAfterPartial.SubmittedTotal != 0 || statsAfterPartial.MissingTotal != 1 {
+		t.Fatalf("partial submission should not count as submitted, got %#v", statsAfterPartial)
+	}
+
+	secondPayload := submitFiles([]multipartFileSpec{{
+		FieldName: "files",
+		FileName:  "second.txt",
+		Contents:  []byte("second version"),
+	}})
+	if secondPayload.Submission == nil || secondPayload.Submission.ID != firstPayload.Submission.ID || secondPayload.Submission.Status != "partial" {
+		t.Fatalf("expected same partial submission row after second file, got %#v", secondPayload)
+	}
+	if len(secondPayload.Items) != 2 {
+		t.Fatalf("expected previous and new files after second submit, got %#v", secondPayload.Items)
+	}
+	itemByName(secondPayload.Items, "first.txt")
+	itemByName(secondPayload.Items, "second.txt")
+
+	thirdPayload := submitFiles([]multipartFileSpec{
+		{
+			FieldName: "files",
+			FileName:  "first.txt",
+			Contents:  []byte("first replacement"),
+		},
+		{
+			FieldName: "files",
+			FileName:  "third.txt",
+			Contents:  []byte("third version"),
+		},
+	})
+	if thirdPayload.Submission == nil || thirdPayload.Submission.Status != "submitted" {
+		t.Fatalf("expected submission to become submitted after third file, got %#v", thirdPayload.Submission)
+	}
+	if len(thirdPayload.Items) != 3 {
+		t.Fatalf("expected three current files after merge, got %#v", thirdPayload.Items)
+	}
+	firstItem := itemByName(thirdPayload.Items, "first.txt")
+	itemByName(thirdPayload.Items, "second.txt")
+	itemByName(thirdPayload.Items, "third.txt")
+
+	downloadRecorder := httptest.NewRecorder()
+	downloadRequest := httptest.NewRequest(http.MethodGet, firstItem.DownloadURL, nil)
+	downloadRequest.AddCookie(studentCookie)
+	app.ServeHTTP(downloadRecorder, downloadRequest)
+	if downloadRecorder.Code != http.StatusOK || downloadRecorder.Body.String() != "first replacement" {
+		t.Fatalf("expected replaced first file body, got status=%d body=%q", downloadRecorder.Code, downloadRecorder.Body.String())
+	}
+
+	secondItem := itemByName(thirdPayload.Items, "second.txt")
+	afterDelete := deleteSubmissionFile(secondItem.ID)
+	if afterDelete.Submission == nil || afterDelete.Submission.Status != "partial" || len(afterDelete.Items) != 2 {
+		t.Fatalf("expected deletion to recalculate partial status, got %#v", afterDelete)
+	}
+
+	afterDelete = deleteSubmissionFile(itemByName(afterDelete.Items, "first.txt").ID)
+	afterDelete = deleteSubmissionFile(itemByName(afterDelete.Items, "third.txt").ID)
+	if afterDelete.Submission != nil || len(afterDelete.Items) != 0 {
+		t.Fatalf("expected empty response after deleting last file, got %#v", afterDelete)
+	}
+	if countSubmissionsByAssignmentAndStudent(t, app.db, assignment.ID, currentStudent.ID) != 0 {
+		t.Fatalf("expected submission row removed after deleting last file")
+	}
+}
+
+func TestStudentCannotDeleteSubmissionFileAfterDeadline(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	prepareStudentAuthFixture(t, app, "ABCD1234", "20260001", "张小明")
+	studentCookie := activateAndLoginStudent(t, app, "ABCD1234", "20260001", "student123")
+
+	assignment, err := app.createAssignment(createAssignmentRequest{
+		ClassID:      1,
+		Title:        "删除截止保护",
+		Description:  "用于测试截止后不能删除",
+		DueAt:        time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339),
+		Status:       "published",
+		MinFileCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("create assignment: %v", err)
+	}
+
+	body, contentType := multipartFileBody(t, map[string]string{}, "files", "answer.txt", []byte("answer"))
+	submitRecorder := httptest.NewRecorder()
+	submitRequest := httptest.NewRequest(http.MethodPost, "/api/student/assignments/"+itoa(assignment.ID)+"/submission", body)
+	submitRequest.Header.Set("Content-Type", contentType)
+	submitRequest.AddCookie(studentCookie)
+	app.ServeHTTP(submitRecorder, submitRequest)
+	if submitRecorder.Code != http.StatusOK {
+		t.Fatalf("expected submission 200, got %d: %s", submitRecorder.Code, submitRecorder.Body.String())
+	}
+	var submitPayload studentSubmissionResponse
+	decodeJSON(t, submitRecorder.Body, &submitPayload)
+	if len(submitPayload.Items) != 1 {
+		t.Fatalf("expected one submitted file, got %#v", submitPayload)
+	}
+
+	if _, err := app.db.Exec(`update assignments set due_at = ? where id = ?`, time.Now().Add(-time.Hour).UTC().Format(time.RFC3339), assignment.ID); err != nil {
+		t.Fatalf("expire assignment: %v", err)
+	}
+
+	deleteRecorder := httptest.NewRecorder()
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/student/assignments/"+itoa(assignment.ID)+"/submission/files/"+itoa(submitPayload.Items[0].ID), nil)
+	deleteRequest.AddCookie(studentCookie)
+	app.ServeHTTP(deleteRecorder, deleteRequest)
+	if deleteRecorder.Code != http.StatusConflict {
+		t.Fatalf("expected delete after deadline 409, got %d: %s", deleteRecorder.Code, deleteRecorder.Body.String())
 	}
 }
 
@@ -1967,7 +2160,7 @@ func TestStudentSubmissionSupportsFolderUploadAndTeacherArchive(t *testing.T) {
 	if payload.Items[0].FileCount != 2 || payload.Items[0].FolderCount != 1 {
 		t.Fatalf("expected folder file stats, got %#v", payload.Items[0])
 	}
-	if countSubmissionFileEntries(t, app.db, payload.Submission.ID, 1) != 4 {
+	if payload.Submission == nil || countSubmissionFileEntries(t, app.db, payload.Submission.ID, 1) != 4 {
 		t.Fatalf("expected folder, subfolder and 2 files in submission entries")
 	}
 
@@ -2186,6 +2379,16 @@ func TestTeacherAssignmentSubmissionsArchiveSupportsSelectedAndAllAssignments(t 
 	if err != nil {
 		t.Fatalf("create second assignment: %v", err)
 	}
+	partialAssignment, err := app.createAssignment(createAssignmentRequest{
+		ClassID:      1,
+		Title:        "第三课待补齐",
+		DueAt:        time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339),
+		Status:       "published",
+		MinFileCount: 2,
+	})
+	if err != nil {
+		t.Fatalf("create partial assignment: %v", err)
+	}
 	otherClass, err := app.createClass("隔壁归档班")
 	if err != nil {
 		t.Fatalf("create other class: %v", err)
@@ -2229,6 +2432,9 @@ func TestTeacherAssignmentSubmissionsArchiveSupportsSelectedAndAllAssignments(t 
 	})
 	submitFiles(studentCookie, secondAssignment.ID, []multipartFileSpec{
 		{FieldName: "files", FileName: "final.txt", Contents: []byte("second assignment body"), RelativePath: "20260001-张小明/final.txt"},
+	})
+	submitFiles(studentCookie, partialAssignment.ID, []multipartFileSpec{
+		{FieldName: "files", FileName: "partial.txt", Contents: []byte("partial assignment body"), RelativePath: "partial.txt"},
 	})
 	var firstSubmissionID int64
 	if err := app.db.QueryRow(`select id from assignment_submissions where assignment_id = ?`, firstAssignment.ID).Scan(&firstSubmissionID); err != nil {
@@ -2293,6 +2499,9 @@ func TestTeacherAssignmentSubmissionsArchiveSupportsSelectedAndAllAssignments(t 
 	if allEntries["第二课续做/20260001-张小明/final.txt"] != "second assignment body" {
 		t.Fatalf("expected all archive to include second assignment submission, got %#v", allEntries)
 	}
+	if _, exists := allEntries["第三课待补齐/20260001-张小明/partial.txt"]; exists {
+		t.Fatalf("all archive should not include partial submission files: %#v", allEntries)
+	}
 	allManifest := allEntries["提交清单.csv"]
 	if !strings.Contains(allManifest, "第一课续做,20260001,张小明,") || !strings.Contains(allManifest, ",1,draft.txt") {
 		t.Fatalf("expected all archive manifest to include first assignment file, got %q", allManifest)
@@ -2300,9 +2509,15 @@ func TestTeacherAssignmentSubmissionsArchiveSupportsSelectedAndAllAssignments(t 
 	if !strings.Contains(allManifest, "第二课续做,20260001,张小明,") || !strings.Contains(allManifest, ",1,final.txt") {
 		t.Fatalf("expected all archive manifest to include second assignment file, got %q", allManifest)
 	}
+	if strings.Contains(allManifest, "第三课待补齐") {
+		t.Fatalf("expected partial assignment to be excluded from submitted manifest, got %q", allManifest)
+	}
 	allMissingManifest := allEntries["未提交清单.csv"]
 	if !strings.Contains(allMissingManifest, "第一课续做,20260002,李待交,未提交") || !strings.Contains(allMissingManifest, "第二课续做,20260002,李待交,未提交") {
 		t.Fatalf("expected all archive missing manifest, got %q", allMissingManifest)
+	}
+	if !strings.Contains(allMissingManifest, "第三课待补齐,20260001,张小明,待补齐") {
+		t.Fatalf("expected all archive missing manifest to mark partial submissions, got %q", allMissingManifest)
 	}
 	if _, exists := allEntries["隔壁班作业/20269999-隔壁同学/other.txt"]; exists {
 		t.Fatalf("all archive should not include another class submission: %#v", allEntries)
@@ -2385,7 +2600,7 @@ func TestAssignmentSubmissionRulesArePersistedAndReturned(t *testing.T) {
 	}
 }
 
-func TestStudentSubmissionRulesRejectInvalidShapeAndCount(t *testing.T) {
+func TestStudentSubmissionRulesRejectInvalidShapeAndTrackPartialCount(t *testing.T) {
 	t.Parallel()
 
 	_, app := newTestServer(t)
@@ -2446,17 +2661,39 @@ func TestStudentSubmissionRulesRejectInvalidShapeAndCount(t *testing.T) {
 	shortRequest.Header.Set("Content-Type", shortContentType)
 	shortRequest.AddCookie(studentCookie)
 	app.ServeHTTP(shortRecorder, shortRequest)
-	if shortRecorder.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("expected too few files 422, got %d: %s", shortRecorder.Code, shortRecorder.Body.String())
+	if shortRecorder.Code != http.StatusOK {
+		t.Fatalf("expected partial folder submission 200, got %d: %s", shortRecorder.Code, shortRecorder.Body.String())
 	}
-	var shortError apiErrorResponse
-	decodeJSON(t, shortRecorder.Body, &shortError)
-	if !strings.Contains(shortError.Error.Message, "至少提交 5 个文件") {
-		t.Fatalf("expected minimum file count error, got %#v", shortError)
+	var shortPayload studentSubmissionResponse
+	decodeJSON(t, shortRecorder.Body, &shortPayload)
+	if shortPayload.Submission == nil || shortPayload.Submission.Status != "partial" || len(shortPayload.Items) != 1 || shortPayload.Items[0].FileCount != 1 {
+		t.Fatalf("expected partial folder submission with one saved file, got %#v", shortPayload)
 	}
 
-	validFiles := make([]multipartFileSpec, 0, 5)
-	for index := 1; index <= 5; index++ {
+	otherRootBody, otherRootContentType := multipartFilesBody(t, map[string]string{}, []multipartFileSpec{
+		{
+			FieldName:    "files",
+			FileName:     "other.txt",
+			Contents:     []byte("other root"),
+			RelativePath: "另一个文件夹/other.txt",
+		},
+	})
+	otherRootRecorder := httptest.NewRecorder()
+	otherRootRequest := httptest.NewRequest(http.MethodPost, "/api/student/assignments/"+itoa(assignment.ID)+"/submission", otherRootBody)
+	otherRootRequest.Header.Set("Content-Type", otherRootContentType)
+	otherRootRequest.AddCookie(studentCookie)
+	app.ServeHTTP(otherRootRecorder, otherRootRequest)
+	if otherRootRecorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected different folder root 422, got %d: %s", otherRootRecorder.Code, otherRootRecorder.Body.String())
+	}
+	var otherRootError apiErrorResponse
+	decodeJSON(t, otherRootRecorder.Body, &otherRootError)
+	if !strings.Contains(otherRootError.Error.Message, "只能提交一个文件夹") {
+		t.Fatalf("expected existing folder rule error, got %#v", otherRootError)
+	}
+
+	validFiles := make([]multipartFileSpec, 0, 4)
+	for index := 2; index <= 5; index++ {
 		validFiles = append(validFiles, multipartFileSpec{
 			FieldName:    "files",
 			FileName:     fmt.Sprintf("%d.txt", index),
@@ -2475,8 +2712,8 @@ func TestStudentSubmissionRulesRejectInvalidShapeAndCount(t *testing.T) {
 	}
 	var validPayload studentSubmissionResponse
 	decodeJSON(t, validRecorder.Body, &validPayload)
-	if len(validPayload.Items) != 1 || validPayload.Items[0].Kind != "dir" || validPayload.Items[0].FileCount != 5 {
-		t.Fatalf("expected accepted folder with 5 files, got %#v", validPayload.Items)
+	if validPayload.Submission == nil || validPayload.Submission.Status != "submitted" || len(validPayload.Items) != 1 || validPayload.Items[0].Kind != "dir" || validPayload.Items[0].FileCount != 5 {
+		t.Fatalf("expected accepted submitted folder with 5 files, got %#v", validPayload)
 	}
 }
 
@@ -2578,14 +2815,14 @@ func TestTeacherAssignmentDetailCanViewCurrentStudentSubmissions(t *testing.T) {
 		t.Fatalf("expected first student submission 200, got %d: %s", firstRecorder.Code, firstRecorder.Body.String())
 	}
 
-	overwriteBody, overwriteContentType := multipartFileBody(t, map[string]string{}, "files", "new-one.txt", []byte("new one"))
-	overwriteRecorder := httptest.NewRecorder()
-	overwriteRequest := httptest.NewRequest(http.MethodPost, "/api/student/assignments/"+itoa(assignment.ID)+"/submission", overwriteBody)
-	overwriteRequest.Header.Set("Content-Type", overwriteContentType)
-	overwriteRequest.AddCookie(studentOneCookie)
-	app.ServeHTTP(overwriteRecorder, overwriteRequest)
-	if overwriteRecorder.Code != http.StatusOK {
-		t.Fatalf("expected overwrite submission 200, got %d: %s", overwriteRecorder.Code, overwriteRecorder.Body.String())
+	appendBody, appendContentType := multipartFileBody(t, map[string]string{}, "files", "new-one.txt", []byte("new one"))
+	appendRecorder := httptest.NewRecorder()
+	appendRequest := httptest.NewRequest(http.MethodPost, "/api/student/assignments/"+itoa(assignment.ID)+"/submission", appendBody)
+	appendRequest.Header.Set("Content-Type", appendContentType)
+	appendRequest.AddCookie(studentOneCookie)
+	app.ServeHTTP(appendRecorder, appendRequest)
+	if appendRecorder.Code != http.StatusOK {
+		t.Fatalf("expected appended submission 200, got %d: %s", appendRecorder.Code, appendRecorder.Body.String())
 	}
 
 	secondBody, secondContentType := multipartFileBody(t, map[string]string{}, "files", "two.txt", []byte("student two"))
@@ -2621,21 +2858,33 @@ func TestTeacherAssignmentDetailCanViewCurrentStudentSubmissions(t *testing.T) {
 			continue
 		}
 		foundStudentOne = true
-		if len(submission.Items) != 1 {
-			t.Fatalf("expected one current file for 张小明, got %#v", submission.Items)
+		if len(submission.Items) != 2 {
+			t.Fatalf("expected merged current files for 张小明, got %#v", submission.Items)
 		}
-		if submission.Items[0].Name != "new-one.txt" {
-			t.Fatalf("expected overwrite file only, got %#v", submission.Items)
+		var newItem fileSummary
+		var foundNewItem bool
+		var foundOldItem bool
+		for _, item := range submission.Items {
+			if item.Name == "new-one.txt" {
+				newItem = item
+				foundNewItem = true
+			}
+			if item.Name == "old-one.txt" {
+				foundOldItem = true
+			}
 		}
-		if submission.Items[0].DownloadURL != "/api/assignments/"+itoa(assignment.ID)+"/submissions/files/"+itoa(submission.Items[0].ID)+"/download?classId=1" {
-			t.Fatalf("unexpected teacher submission download url %#v", submission.Items[0])
+		if !foundNewItem || !foundOldItem {
+			t.Fatalf("expected old and new files after incremental submission, got %#v", submission.Items)
 		}
-		expectedPreviewURL := "/api/assignments/" + itoa(assignment.ID) + "/submissions/files/" + itoa(submission.Items[0].ID) + "/preview?classId=1"
-		if submission.Items[0].PreviewURL != expectedPreviewURL {
-			t.Fatalf("unexpected teacher submission preview url %#v", submission.Items[0])
+		if newItem.DownloadURL != "/api/assignments/"+itoa(assignment.ID)+"/submissions/files/"+itoa(newItem.ID)+"/download?classId=1" {
+			t.Fatalf("unexpected teacher submission download url %#v", newItem)
+		}
+		expectedPreviewURL := "/api/assignments/" + itoa(assignment.ID) + "/submissions/files/" + itoa(newItem.ID) + "/preview?classId=1"
+		if newItem.PreviewURL != expectedPreviewURL {
+			t.Fatalf("unexpected teacher submission preview url %#v", newItem)
 		}
 		previewRecorder := httptest.NewRecorder()
-		previewRequest := httptest.NewRequest(http.MethodGet, submission.Items[0].PreviewURL, nil)
+		previewRequest := httptest.NewRequest(http.MethodGet, newItem.PreviewURL, nil)
 		previewRequest.AddCookie(teacherCookie)
 		app.ServeHTTP(previewRecorder, previewRequest)
 		if previewRecorder.Code != http.StatusOK || previewRecorder.Body.String() != "new one" {
@@ -5706,6 +5955,35 @@ func TestRemoveFileTreeFallsBackAfterOpenfdatInvalidArgument(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "素材")); !os.IsNotExist(err) {
 		t.Fatalf("expected directory tree to be removed, got %v", err)
+	}
+}
+
+func TestDeleteSubmissionFilesUsesRemoveFileTreeFallback(t *testing.T) {
+	_, app := newTestServer(t)
+	submissionID := int64(42)
+	classID := int64(1)
+	if _, err := app.createSeedFile("submission", optionalInt64(classID), assignmentSubmissionParentPath(submissionID), "效果示例.txt", []byte("demo")); err != nil {
+		t.Fatalf("create submission file: %v", err)
+	}
+
+	originalRemoveAllPath := removeAllPath
+	removeAllCalled := false
+	removeAllPath = func(path string) error {
+		removeAllCalled = true
+		return &os.PathError{Op: "openfdat", Path: filepath.Join(path, "效果示例"), Err: syscall.EINVAL}
+	}
+	t.Cleanup(func() {
+		removeAllPath = originalRemoveAllPath
+	})
+
+	if err := app.deleteSubmissionFiles(submissionID, classID); err != nil {
+		t.Fatalf("expected submission deletion fallback to succeed, got %v", err)
+	}
+	if !removeAllCalled {
+		t.Fatalf("expected deleteSubmissionFiles to use removeFileTree")
+	}
+	if countSubmissionFileEntries(t, app.db, submissionID, classID) != 0 {
+		t.Fatalf("expected submission file entries removed")
 	}
 }
 

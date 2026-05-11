@@ -37,6 +37,15 @@
           <a class="button button--secondary" :href="downloadUrl(row.item)" :data-testid="resolveDownloadTestId(row.item.id)">
               {{ row.item.kind === "dir" ? "下载压缩包" : "下载" }}
           </a>
+          <button
+            v-if="deletable"
+            class="button button--ghost text-button--danger"
+            type="button"
+            :data-testid="resolveDeleteTestId(row.item.id)"
+            @click="$emit('delete', row.item)"
+          >
+            删除
+          </button>
         </div>
       </article>
     </div>
@@ -63,20 +72,25 @@ const props = withDefaults(defineProps<{
   previewTestIdPrefix?: string;
   thumbnailTestIdPrefix?: string;
   downloadTestIdPrefix?: string;
+  deleteTestIdPrefix?: string;
   emptyMessage?: string;
   gridSize?: SubmissionFileGridSize;
+  deletable?: boolean;
 }>(), {
   testId: "submission-file-grid",
   itemTestIdPrefix: "submission-file",
   previewTestIdPrefix: "submission-file-preview",
   thumbnailTestIdPrefix: "submission-file-thumb",
   downloadTestIdPrefix: "submission-file-download",
+  deleteTestIdPrefix: "submission-file-delete",
   emptyMessage: "",
   gridSize: "medium",
+  deletable: false,
 });
 
 defineEmits<{
   preview: [item: AssignmentAttachmentItem];
+  delete: [item: AssignmentAttachmentItem];
 }>();
 
 const fileRows = computed(() => flattenItems(props.items));
@@ -181,6 +195,10 @@ function resolveThumbnailTestId(id: number): string {
 
 function resolveDownloadTestId(id: number): string {
   return `${props.downloadTestIdPrefix}-${id}`;
+}
+
+function resolveDeleteTestId(id: number): string {
+  return `${props.deleteTestIdPrefix}-${id}`;
 }
 </script>
 

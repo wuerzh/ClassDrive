@@ -156,12 +156,14 @@ export interface AssignmentAttachmentItem {
   children?: AssignmentAttachmentItem[];
 }
 
+export type AssignmentSubmissionStatus = "partial" | "submitted";
+
 export interface AssignmentSubmissionItem {
   id: number;
   studentId: number;
   studentNo: string;
   displayName: string;
-  status: "submitted";
+  status: AssignmentSubmissionStatus;
   submittedAt: string;
   updatedAt: string;
   reviewStatus: "pending" | "reviewed";
@@ -179,7 +181,7 @@ export interface StudentSubmissionConstraints {
 
 export interface StudentSubmissionSummary {
   id: number;
-  status: "submitted";
+  status: AssignmentSubmissionStatus;
   submittedAt: string;
   updatedAt: string;
 }
@@ -689,6 +691,14 @@ export const api = {
       {
         method: "POST",
         body: formData,
+      },
+    );
+  },
+  deleteStudentSubmissionFile(payload: { assignmentId: number; fileId: number }) {
+    return request<{ submission: StudentSubmissionSummary | null; items: AssignmentAttachmentItem[] }>(
+      `/api/student/assignments/${payload.assignmentId}/submission/files/${payload.fileId}`,
+      {
+        method: "DELETE",
       },
     );
   },

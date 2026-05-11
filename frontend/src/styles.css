@@ -1509,12 +1509,16 @@ textarea:focus {
 
 .status-pill {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
+  width: fit-content;
+  max-width: 100%;
   min-height: 22px;
   padding: 0 8px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
   border: 1px solid transparent;
 }
 

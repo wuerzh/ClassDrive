@@ -3,6 +3,8 @@ import {
   assignmentStatusLabel,
   assignmentStatusTone,
   reviewStatusLabel,
+  submissionStatusLabel,
+  submissionStatusTone,
   studentAssignmentStatusLabel,
   studentAssignmentStatusTone,
   teacherRoleLabel,
@@ -19,6 +21,10 @@ describe("ui copy helpers", () => {
     expect(assignmentStatusTone("published")).toBe("status-pill--success");
     expect(reviewStatusLabel("pending")).toBe("未批改");
     expect(reviewStatusLabel("reviewed")).toBe("已批改");
+    expect(submissionStatusLabel("submitted")).toBe("已提交");
+    expect(submissionStatusLabel("partial")).toBe("待补齐");
+    expect(submissionStatusTone("submitted")).toBe("status-pill--success");
+    expect(submissionStatusTone("partial")).toBe("status-pill--warning");
   });
 
   it("formats teacher role and teacher state consistently", () => {
@@ -31,12 +37,16 @@ describe("ui copy helpers", () => {
   it("formats student assignment status consistently", () => {
     expect(studentAssignmentStatusLabel({ overdue: false, submission: null })).toBe("未提交");
     expect(studentAssignmentStatusLabel({ overdue: false, submission: { id: 1 } })).toBe("已提交");
+    expect(studentAssignmentStatusLabel({ overdue: false, submission: { id: 3, status: "partial" } })).toBe("已保存待补齐");
     expect(studentAssignmentStatusLabel({ overdue: true, submission: null })).toBe("已截止");
     expect(studentAssignmentStatusLabel({ overdue: true, submission: { id: 2 } })).toBe("已截止（已提交）");
+    expect(studentAssignmentStatusLabel({ overdue: true, submission: { id: 4, status: "partial" } })).toBe("已截止（待补齐）");
     expect(studentAssignmentStatusTone({ overdue: false, submission: null })).toBe("status-pill--neutral");
     expect(studentAssignmentStatusTone({ overdue: false, submission: { id: 1 } })).toBe("status-pill--success");
+    expect(studentAssignmentStatusTone({ overdue: false, submission: { id: 3, status: "partial" } })).toBe("status-pill--warning");
     expect(studentAssignmentStatusTone({ overdue: true, submission: null })).toBe("status-pill--danger");
     expect(studentAssignmentStatusTone({ overdue: true, submission: { id: 2 } })).toBe("status-pill--accent");
+    expect(studentAssignmentStatusTone({ overdue: true, submission: { id: 4, status: "partial" } })).toBe("status-pill--warning");
   });
 
   it("exports shared empty-state copy", () => {

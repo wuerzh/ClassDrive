@@ -199,9 +199,28 @@
                         </div>
                       </td>
                       <td>
-                        <div class="assignment-submissions-table__content">
+                        <div
+                          class="assignment-submissions-table__content"
+                          :data-testid="`assignment-submission-content-${submission.id}`"
+                        >
                           <strong>{{ formatSubmissionItemsSummary(submission.items) }}</strong>
-                          <span v-if="submission.items.length">{{ formatSubmissionItemNames(submission.items) }}</span>
+                          <div
+                            class="assignment-submissions-table__content-meta"
+                            :data-testid="`assignment-submission-content-meta-${submission.id}`"
+                          >
+                            <StatusPill
+                              :label="submissionStatusText(submission.status)"
+                              :tone="submissionStatusPillTone(submission.status)"
+                              :data-testid="`assignment-submission-status-badge-${submission.id}`"
+                            />
+                            <span
+                              v-if="submission.items.length"
+                              class="assignment-submissions-table__item-names"
+                              :data-testid="`assignment-submission-item-names-${submission.id}`"
+                            >
+                              {{ formatSubmissionItemNames(submission.items) }}
+                            </span>
+                          </div>
                         </div>
                       </td>
                       <td>
@@ -248,7 +267,8 @@
           class="assignment-review-drawer"
           data-testid="assignment-submission-review-drawer"
           size="min(1280px, 96vw)"
-          :close-on-click-modal="false"
+          :close-on-click-modal="true"
+          :before-close="handleReviewDrawerBeforeClose"
           :teleported="false"
         >
           <template #header>
@@ -264,7 +284,7 @@
                   class="button assignment-review-drawer__nav-button"
                   type="button"
                   data-testid="assignment-review-drawer-prev"
-                  :disabled="activeSubmissionIndex <= 0"
+                  :disabled="drawerNavigationLoading || !drawerHasPreviousSubmission"
                   @click="selectPrevSubmission"
                 >
                   上一个学生
@@ -273,7 +293,7 @@
                   class="button assignment-review-drawer__nav-button"
                   type="button"
                   data-testid="assignment-review-drawer-next"
-                  :disabled="activeSubmissionIndex < 0 || activeSubmissionIndex >= visibleSubmissions.length - 1"
+                  :disabled="drawerNavigationLoading || !drawerHasNextSubmission"
                   @click="selectNextSubmission"
                 >
                   下一个学生
@@ -290,10 +310,16 @@
                 <strong>{{ activeSubmission.displayName }}</strong>
                 <span>学号 {{ activeSubmission.studentNo }}</span>
               </div>
-              <StatusPill
-                :label="reviewStatusText(activeSubmission.reviewStatus)"
-                :tone="reviewStatusTone(activeSubmission.reviewStatus)"
-              />
+              <div class="assignment-review-drawer__status-pills" data-testid="assignment-review-drawer-statuses">
+                <StatusPill
+                  :label="reviewStatusText(activeSubmission.reviewStatus)"
+                  :tone="reviewStatusTone(activeSubmission.reviewStatus)"
+                />
+                <StatusPill
+                  :label="submissionStatusText(activeSubmission.status)"
+                  :tone="submissionStatusPillTone(activeSubmission.status)"
+                />
+              </div>
               <div class="assignment-review-drawer__summary-list">
                 <span>
                   <strong>提交</strong>
@@ -320,7 +346,10 @@
                   </div>
                 </div>
                 <div class="assignment-review-drawer__review-row">
-                  <label class="app-field">
+                  <label
+                    class="app-field assignment-review-drawer__status-field"
+                    :data-testid="`assignment-submission-review-status-field-${activeSubmission.id}`"
+                  >
                     <span>批改状态</span>
                     <select
                       v-model="submissionReviewDrafts[activeSubmission.id].reviewStatus"
@@ -346,7 +375,7 @@
                       class="button"
                       type="button"
                       data-testid="assignment-submission-review-close"
-                      @click="reviewDrawerOpen = false"
+                      @click="requestCloseReviewDrawer"
                     >
                       关闭
                     </button>
@@ -513,6 +542,17 @@
             </div>
           </template>
         </ElDrawer>
+        <ConfirmDialog
+          :open="reviewDrawerCloseConfirmOpen"
+          title="关闭批改抽屉"
+          message="批改内容还没有保存，关闭后本次修改不会保留。"
+          test-id-prefix="assignment-review-close-discard"
+          confirm-label="确认关闭"
+          cancel-label="继续编辑"
+          confirm-tone="danger"
+          @confirm="confirmCloseReviewDrawer"
+          @cancel="cancelCloseReviewDrawer"
+        />
         <FilePreviewDialog
           :item="submissionPreviewItem"
           :kind="submissionPreviewKind"
@@ -590,7 +630,12 @@
       </section>
     </div>
 
-  <div v-if="assignment && editDialogOpen" class="copy-dialog-backdrop">
+  <div
+    v-if="assignment && editDialogOpen"
+    class="copy-dialog-backdrop"
+    data-testid="assignment-edit-backdrop"
+    @click.self="closeEditDialog"
+  >
       <section class="copy-dialog assignment-edit-dialog" data-testid="assignment-edit-dialog">
         <div class="copy-dialog__header">
           <div>
@@ -762,6 +807,18 @@
     </div>
 
     <ConfirmDialog
+      :open="editDialogDiscardConfirmOpen"
+      title="放弃作业修改"
+      message="作业修改还没有保存，关闭后本次修改不会保留。"
+      test-id-prefix="assignment-edit-discard"
+      confirm-label="确认关闭"
+      cancel-label="继续编辑"
+      confirm-tone="danger"
+      @cancel="cancelCloseEditDialog"
+      @confirm="confirmCloseEditDialog"
+    />
+
+    <ConfirmDialog
       :open="pendingAttachmentDelete !== null"
       title="确认删除附件"
       :message="pendingAttachmentDelete ? `删除后将移除附件 ${pendingAttachmentDelete.name}。` : ''"
@@ -815,7 +872,7 @@ import { useToastStore } from "@/stores/toast";
 import { useUploadStore } from "@/stores/upload";
 import { getFilePreviewKind, type FilePreviewKind } from "@/utils/file-preview";
 import { exportRowsToSpreadsheet } from "@/utils/spreadsheet-export";
-import { assignmentStatusLabel, assignmentStatusTone, reviewStatusLabel, uiCopy } from "@/utils/ui-copy";
+import { assignmentStatusLabel, assignmentStatusTone, reviewStatusLabel, submissionStatusLabel, submissionStatusTone, uiCopy } from "@/utils/ui-copy";
 
 interface AssignmentMissingStatsRow {
   studentId: number;
@@ -825,6 +882,7 @@ interface AssignmentMissingStatsRow {
 
 type SubmissionFileViewMode = "grid" | "list";
 type SubmissionFileGridSize = "small" | "medium" | "large" | "xlarge";
+type DrawerBoundarySelection = "first" | "last";
 
 const route = useRoute();
 const router = useRouter();
@@ -870,7 +928,12 @@ const attachmentInput = ref<HTMLInputElement | null>(null);
 const pendingAttachmentDelete = ref<{ id: number; name: string } | null>(null);
 const pendingAssignmentDelete = ref(false);
 const editDialogOpen = ref(false);
+const editDialogDiscardConfirmOpen = ref(false);
 const reviewDrawerOpen = ref(false);
+const reviewDrawerCloseConfirmOpen = ref(false);
+const pendingReviewDrawerCloseDone = ref<(() => void) | null>(null);
+const drawerNavigationLoading = ref(false);
+const pendingDrawerBoundarySelection = ref<DrawerBoundarySelection | null>(null);
 const submissionArchiveDownloadConfirmOpen = ref(false);
 const assignmentMissingStatsOpen = ref(false);
 const assignmentMissingStatsLoading = ref(false);
@@ -1004,8 +1067,43 @@ const pageDescription = computed(() => {
   return `${currentClassName.value} · ${assignmentStatusLabel(assignment.value.status)}`;
 });
 
+const hasEditDialogDraftChanges = computed(() => {
+  const currentAssignment = assignment.value;
+  if (!currentAssignment) {
+    return false;
+  }
+  return editTitle.value !== currentAssignment.title
+    || editDescription.value !== currentAssignment.description
+    || editDueAt.value !== toDateTimeLocalValue(currentAssignment.dueAt)
+    || editStatus.value !== currentAssignment.status
+    || editSubmissionMode.value !== currentAssignment.submissionMode
+    || editSubmissionTypeCategory.value !== (currentAssignment.submissionTypeCategory ?? "mixed")
+    || editMinFileCount.value !== currentAssignment.minFileCount;
+});
+
 const activeSubmission = computed(() => (
   visibleSubmissions.value.find((submission) => submission.id === activeSubmissionId.value) ?? null
+));
+const hasActiveSubmissionReviewDraftChanges = computed(() => {
+  const submission = activeSubmission.value;
+  if (!submission) {
+    return false;
+  }
+  const draft = submissionReviewDrafts.value[submission.id];
+  if (!draft) {
+    return false;
+  }
+  return draft.reviewStatus !== submission.reviewStatus || draft.teacherComment !== submission.teacherCommentSummary;
+});
+const drawerHasPreviousSubmission = computed(() => (
+  activeSubmissionIndex.value > 0 || (activeSubmissionIndex.value === 0 && submissionPage.value > 1)
+));
+const drawerHasNextSubmission = computed(() => (
+  activeSubmissionIndex.value >= 0
+  && (
+    activeSubmissionIndex.value < visibleSubmissions.value.length - 1
+    || submissionPage.value < submissionTotalPages.value
+  )
 ));
 
 function resolvePreviewKind(item: AssignmentAttachmentItem): FilePreviewKind {
@@ -1102,12 +1200,32 @@ function formatDateTime(value: string) {
   });
 }
 
+function toDateTimeLocalValue(value: string) {
+  if (!value) {
+    return "";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+  const offset = parsed.getTimezoneOffset() * 60_000;
+  return new Date(parsed.getTime() - offset).toISOString().slice(0, 16);
+}
+
 function reviewStatusText(value: "pending" | "reviewed") {
   return reviewStatusLabel(value);
 }
 
 function reviewStatusTone(value: "pending" | "reviewed"): string {
   return value === "reviewed" ? "status-pill--success" : "status-pill--warning";
+}
+
+function submissionStatusText(value: "partial" | "submitted") {
+  return submissionStatusLabel(value);
+}
+
+function submissionStatusPillTone(value: "partial" | "submitted") {
+  return submissionStatusTone(value);
 }
 
 function normalizeMinFileCount(value: number) {
@@ -1217,14 +1335,61 @@ function toDueAtPayload(value: string) {
   return parsed.toISOString();
 }
 
-function selectPrevSubmission() {
-  assignmentDetailStore.selectPrevSubmission();
+async function navigateDrawerBoundaryPage(page: number, selection: DrawerBoundarySelection) {
+  if (drawerNavigationLoading.value) {
+    return;
+  }
+  drawerNavigationLoading.value = true;
+  pendingDrawerBoundarySelection.value = selection;
+  try {
+    await replaceSubmissionRoute({ page });
+  } catch (error) {
+    drawerNavigationLoading.value = false;
+    pendingDrawerBoundarySelection.value = null;
+    toastStore.push("error", error instanceof ApiError ? error.message : "切换学生失败");
+  }
+}
+
+function applyPendingDrawerBoundarySelection() {
+  const selection = pendingDrawerBoundarySelection.value;
+  if (!selection) {
+    return;
+  }
+  pendingDrawerBoundarySelection.value = null;
+  drawerNavigationLoading.value = false;
+  const nextSubmission = selection === "first"
+    ? visibleSubmissions.value[0]
+    : visibleSubmissions.value[visibleSubmissions.value.length - 1];
+  assignmentDetailStore.setActiveSubmission(nextSubmission?.id ?? null);
   handleDrawerActiveSubmissionChanged();
 }
 
-function selectNextSubmission() {
-  assignmentDetailStore.selectNextSubmission();
-  handleDrawerActiveSubmissionChanged();
+async function selectPrevSubmission() {
+  if (drawerNavigationLoading.value || activeSubmissionIndex.value < 0) {
+    return;
+  }
+  if (activeSubmissionIndex.value > 0) {
+    assignmentDetailStore.selectPrevSubmission();
+    handleDrawerActiveSubmissionChanged();
+    return;
+  }
+  if (submissionPage.value > 1) {
+    await navigateDrawerBoundaryPage(submissionPage.value - 1, "last");
+  }
+}
+
+async function selectNextSubmission() {
+  if (drawerNavigationLoading.value || activeSubmissionIndex.value < 0) {
+    return;
+  }
+  if (activeSubmissionIndex.value < visibleSubmissions.value.length - 1) {
+    assignmentDetailStore.selectNextSubmission();
+    handleDrawerActiveSubmissionChanged();
+    return;
+  }
+  if (submissionPage.value < submissionTotalPages.value) {
+    await navigateDrawerBoundaryPage(submissionPage.value + 1, "first");
+  }
 }
 
 function openSubmissionArchiveDownloadConfirm() {
@@ -1281,6 +1446,40 @@ function handleDrawerActiveSubmissionChanged() {
   }
   const submissionID = activeSubmissionId.value;
   void markSubmissionReviewedOnOpen(submissionID);
+}
+
+function requestCloseReviewDrawer() {
+  if (hasActiveSubmissionReviewDraftChanges.value) {
+    pendingReviewDrawerCloseDone.value = null;
+    reviewDrawerCloseConfirmOpen.value = true;
+    return;
+  }
+  reviewDrawerOpen.value = false;
+}
+
+function handleReviewDrawerBeforeClose(done: () => void) {
+  if (hasActiveSubmissionReviewDraftChanges.value) {
+    pendingReviewDrawerCloseDone.value = done;
+    reviewDrawerCloseConfirmOpen.value = true;
+    return;
+  }
+  done();
+}
+
+function confirmCloseReviewDrawer() {
+  reviewDrawerCloseConfirmOpen.value = false;
+  const pendingDone = pendingReviewDrawerCloseDone.value;
+  pendingReviewDrawerCloseDone.value = null;
+  if (pendingDone) {
+    pendingDone();
+    return;
+  }
+  reviewDrawerOpen.value = false;
+}
+
+function cancelCloseReviewDrawer() {
+  reviewDrawerCloseConfirmOpen.value = false;
+  pendingReviewDrawerCloseDone.value = null;
 }
 
 function closeSubmissionPreview() {
@@ -1352,11 +1551,29 @@ function openEditDialog() {
     return;
   }
   assignmentDetailStore.syncEditForm(assignment.value);
+  editDialogDiscardConfirmOpen.value = false;
   editDialogOpen.value = true;
 }
 
 function closeEditDialog() {
+  if (hasEditDialogDraftChanges.value) {
+    editDialogDiscardConfirmOpen.value = true;
+    return;
+  }
+  forceCloseEditDialog();
+}
+
+function forceCloseEditDialog() {
   editDialogOpen.value = false;
+  editDialogDiscardConfirmOpen.value = false;
+}
+
+function confirmCloseEditDialog() {
+  forceCloseEditDialog();
+}
+
+function cancelCloseEditDialog() {
+  editDialogDiscardConfirmOpen.value = false;
 }
 
 async function loadClasses() {
@@ -1373,14 +1590,25 @@ async function loadPage() {
     assignmentDetailStore.notFound = true;
     return;
   }
-  await loadClasses();
   applySubmissionStateFromRoute();
+  const canReuseAssignment = assignment.value?.id === currentAssignmentId.value
+    && assignment.value.classId === currentClassId.value
+    && !notFound.value;
   try {
-    await assignmentDetailStore.loadPage(currentClassId.value, currentAssignmentId.value, buildSubmissionRequestOptions());
+    if (canReuseAssignment) {
+      await assignmentDetailStore.loadSubmissions(currentClassId.value, currentAssignmentId.value, buildSubmissionRequestOptions());
+    } else {
+      await loadClasses();
+      await assignmentDetailStore.loadPage(currentClassId.value, currentAssignmentId.value, buildSubmissionRequestOptions());
+    }
     if (submissionPage.value > submissionTotalPages.value) {
       await replaceSubmissionRoute({ page: submissionTotalPages.value });
+      return;
     }
+    applyPendingDrawerBoundarySelection();
   } catch (error) {
+    drawerNavigationLoading.value = false;
+    pendingDrawerBoundarySelection.value = null;
     toastStore.push("error", error instanceof ApiError ? error.message : "加载作业详情失败");
   }
 }
@@ -1596,7 +1824,7 @@ async function saveAssignment() {
     if (updated) {
       assignment.value = updated;
     }
-    closeEditDialog();
+    forceCloseEditDialog();
     toastStore.push("success", "作业已更新");
   } catch (error) {
     toastStore.push("error", error instanceof ApiError ? error.message : "更新作业失败");
@@ -1676,6 +1904,10 @@ watch([
 }, { immediate: true });
 
 watch(visibleSubmissions, (items) => {
+  if (pendingDrawerBoundarySelection.value) {
+    applyPendingDrawerBoundarySelection();
+    return;
+  }
   if (!items.length) {
     assignmentDetailStore.setActiveSubmission(null);
     return;
@@ -1889,7 +2121,7 @@ watch(visibleSubmissions, (items) => {
 }
 
 .assignment-submissions-table__student span,
-.assignment-submissions-table__content span,
+.assignment-submissions-table__item-names,
 .assignment-submissions-table__secondary,
 .assignment-submissions-table__review span:not(.status-pill),
 .assignment-submissions-table__review .assignment-submissions-table__secondary {
@@ -1898,6 +2130,17 @@ watch(visibleSubmissions, (items) => {
   font-size: 0.96rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.assignment-submissions-table__content-meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.assignment-submissions-table__item-names {
+  min-width: 0;
 }
 
 .assignment-submissions-table__review {
@@ -2246,6 +2489,14 @@ watch(visibleSubmissions, (items) => {
   font-weight: 700;
 }
 
+.assignment-review-drawer__status-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-start;
+}
+
 .assignment-review-drawer__summary-list {
   display: flex;
   flex-wrap: wrap;
@@ -2423,7 +2674,7 @@ watch(visibleSubmissions, (items) => {
 
 .assignment-review-drawer__review-row {
   display: grid;
-  grid-template-columns: minmax(132px, 0.38fr) minmax(260px, 1fr) auto;
+  grid-template-columns: 220px minmax(260px, 1fr) auto;
   gap: 10px;
   align-items: end;
 }
@@ -2433,7 +2684,16 @@ watch(visibleSubmissions, (items) => {
   max-width: none;
 }
 
+.assignment-review-drawer__status-field {
+  flex: 0 0 220px;
+  max-width: 220px;
+}
+
 .assignment-review-drawer__review-row .copy-dialog__search {
+  width: 100%;
+}
+
+.assignment-review-drawer__status-field .copy-dialog__search {
   width: 100%;
 }
 

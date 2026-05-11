@@ -43,6 +43,23 @@ describe("student assignment composables", () => {
               updatedAt: "2026-04-19T08:00:00Z",
             },
           },
+          {
+            id: 11,
+            classId: 1,
+            title: "第三单元练习",
+            description: "待补齐",
+            dueAt: "2026-05-02T12:00:00Z",
+            status: "published",
+            createdAt: "2026-04-20T10:00:00Z",
+            updatedAt: "2026-04-20T10:30:00Z",
+            overdue: false,
+            submission: {
+              id: 3,
+              status: "partial",
+              submittedAt: "",
+              updatedAt: "2026-04-21T08:00:00Z",
+            },
+          },
         ],
       }),
     });
@@ -51,12 +68,13 @@ describe("student assignment composables", () => {
     const state = useStudentAssignments();
     await state.loadAssignments();
 
-    expect(state.assignments.value).toHaveLength(2);
+    expect(state.assignments.value).toHaveLength(3);
     expect(getStudentAssignmentStatusText(state.assignments.value[0])).toBe("未提交");
     expect(getStudentAssignmentStatusText(state.assignments.value[1])).toBe("已截止（已提交）");
+    expect(getStudentAssignmentStatusText(state.assignments.value[2])).toBe("已保存待补齐");
   });
 
-  it("loads detail and refreshes current submission after submit", async () => {
+  it("loads detail and refreshes current submission after submit and delete", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -102,6 +120,14 @@ describe("student assignment composables", () => {
             },
           ],
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          submission: null,
+          items: [],
+        }),
       });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -112,5 +138,14 @@ describe("student assignment composables", () => {
     expect(state.assignment.value?.submission?.id).toBe(3);
     expect(state.items.value).toHaveLength(1);
     expect(state.items.value[0].name).toBe("answer.pdf");
+
+    await state.deleteSubmissionFile(201);
+
+    expect(state.assignment.value?.submission).toBeNull();
+    expect(state.items.value).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/student/assignments/9/submission/files/201",
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 });

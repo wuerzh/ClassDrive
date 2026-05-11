@@ -46,7 +46,7 @@ describe("shared styles", () => {
     expect(studentsView).toMatch(/\.students-page__row-actions\s+\.text-button\s*\{[\s\S]*?min-height:\s*24px;/);
     expect(readFileSync(resolve(sourceRoot, "views", "StudentFilesView.vue"), "utf8")).toMatch(/\.student-files-page__card\s*\{[\s\S]*?padding:\s*8px;/);
     const studentAssignmentDetail = readFileSync(resolve(sourceRoot, "views", "StudentAssignmentDetailView.vue"), "utf8");
-    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__split\s*\{[\s\S]*?grid-template-columns:\s*minmax\(440px,\s*560px\)\s+minmax\(0,\s*1fr\);/);
+    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__split\s*\{[\s\S]*?grid-template-columns:\s*minmax\(400px,\s*520px\)\s+minmax\(420px,\s*1fr\);/);
     expect(studentAssignmentDetail).toMatch(/@media\s*\(max-width:\s*1080px\)\s*\{[\s\S]*?\.student-assignment-detail__split\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/);
     expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__requirement--responsive\s*\{[\s\S]*?grid-template-columns:\s*minmax\(150px,\s*1fr\)\s+minmax\(260px,\s*2fr\)\s+minmax\(190px,\s*1\.1fr\)\s+minmax\(150px,\s*0\.8fr\);/);
     expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__requirement\s*\{[\s\S]*?gap:\s*12px 14px;/);
@@ -157,13 +157,15 @@ describe("shared styles", () => {
     expect(footerRule).toMatch(/font-size:\s*13px;/);
   });
 
-  it("keeps modal backdrops above the full app shell and non-dismissable by backdrop click", () => {
+  it("keeps modal backdrops above the full app shell and routes backdrop clicks through guarded close handlers", () => {
     const css = readFileSync(stylesPath, "utf8");
     const vueSource = listSourceFiles(sourceRoot).map((path) => readFileSync(path, "utf8")).join("\n");
+    const assignmentDetail = readFileSync(resolve(sourceRoot, "views", "AssignmentDetailView.vue"), "utf8");
 
     expect(css).toMatch(/\.copy-dialog-backdrop\s*\{[\s\S]*?inset:\s*0;[\s\S]*?width:\s*100vw;[\s\S]*?height:\s*100vh;/);
     expect(css).toMatch(/\.copy-dialog\s*\{[\s\S]*?background:\s*var\(--modal-surface\);/);
-    expect(vueSource).not.toContain("@click.self");
+    expect(vueSource).not.toMatch(/@click\.self="[^"]+\s*=\s*false"/);
+    expect(assignmentDetail).toContain('@click.self="closeEditDialog"');
   });
 
   it("keeps copy dialog headers visually separated from the first body block", () => {
@@ -181,8 +183,16 @@ describe("shared styles", () => {
     expect(confirmDialog).toMatch(/\.copy-dialog-backdrop\s*\{[\s\S]*?z-index:\s*5200;/);
   });
 
+  it("keeps assignment review status controls compact", () => {
+    const assignmentDetail = readFileSync(resolve(sourceRoot, "views", "AssignmentDetailView.vue"), "utf8");
+
+    expect(assignmentDetail).toMatch(/\.assignment-review-drawer__status-field\s*\{[\s\S]*?flex:\s*0 0 220px;/);
+    expect(assignmentDetail).toMatch(/\.assignment-review-drawer__status-field\s+\.copy-dialog__search\s*\{[\s\S]*?width:\s*100%;/);
+  });
+
   it("defines dark native controls and warning feedback tones", () => {
     const css = readFileSync(stylesPath, "utf8");
+    const statusPillRule = css.match(/\.status-pill\s*\{[^}]*\}/)?.[0] ?? "";
 
     expect(css).toMatch(/\.app-datetime-input\s*\{[\s\S]*?color-scheme:\s*light;/);
     expect(css).toMatch(/:root\.dark\s+\.app-datetime-input\s*\{[\s\S]*?color-scheme:\s*dark;/);
@@ -196,6 +206,9 @@ describe("shared styles", () => {
     expect(css).toMatch(/:root\.dark\s+\.students-page__file-input::file-selector-button\s*\{/);
     expect(css).toMatch(/\.toast--warning\s*\{/);
     expect(css).toMatch(/\.status-pill--warning\s*\{/);
+    expect(statusPillRule).toMatch(/width:\s*fit-content;/);
+    expect(statusPillRule).toMatch(/white-space:\s*nowrap;/);
+    expect(statusPillRule).toMatch(/flex:\s*0 0 auto;/);
   });
 
   it("keeps dark date pickers, number steppers, and modal scrollbars legible", () => {

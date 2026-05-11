@@ -44,15 +44,21 @@ export function teacherStateLabel(disabled: boolean) {
 
 type StudentAssignmentStatusInput = {
   overdue: boolean;
-  submission: { id: number } | null;
+  submission: { id: number; status?: "partial" | "submitted" } | null;
 };
 
 export function studentAssignmentStatusLabel(assignment: StudentAssignmentStatusInput) {
+  if (assignment.overdue && assignment.submission?.status === "partial") {
+    return "已截止（待补齐）";
+  }
   if (assignment.overdue && assignment.submission) {
     return "已截止（已提交）";
   }
   if (assignment.overdue) {
     return "已截止";
+  }
+  if (assignment.submission?.status === "partial") {
+    return "已保存待补齐";
   }
   if (assignment.submission) {
     return "已提交";
@@ -61,6 +67,9 @@ export function studentAssignmentStatusLabel(assignment: StudentAssignmentStatus
 }
 
 export function studentAssignmentStatusTone(assignment: StudentAssignmentStatusInput) {
+  if (assignment.submission?.status === "partial") {
+    return "status-pill--warning";
+  }
   if (assignment.overdue && assignment.submission) {
     return "status-pill--accent";
   }
@@ -71,6 +80,14 @@ export function studentAssignmentStatusTone(assignment: StudentAssignmentStatusI
     return "status-pill--success";
   }
   return "status-pill--neutral";
+}
+
+export function submissionStatusLabel(status: "partial" | "submitted") {
+  return status === "partial" ? "待补齐" : "已提交";
+}
+
+export function submissionStatusTone(status: "partial" | "submitted") {
+  return status === "partial" ? "status-pill--warning" : "status-pill--success";
 }
 
 export function uploadSuccessMessage(

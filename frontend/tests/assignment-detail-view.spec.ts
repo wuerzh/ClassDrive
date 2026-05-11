@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
-import { ElDatePicker } from "element-plus";
+import { ElDatePicker, ElDrawer } from "element-plus";
 import AssignmentDetailView from "@/views/AssignmentDetailView.vue";
 
 describe("AssignmentDetailView", () => {
@@ -99,6 +99,15 @@ describe("AssignmentDetailView", () => {
     expect(wrapper.get('[data-testid="assignment-attachment-download-101"]').attributes("href")).toBe(
       "/api/assignments/9/attachments/101/download?classId=2",
     );
+    await wrapper.get('[data-testid="assignment-edit-title"]').setValue("临时标题");
+    await wrapper.get('[data-testid="assignment-edit-close"]').trigger("click");
+    expect(wrapper.get('[data-testid="assignment-edit-discard-dialog"]').text()).toContain("作业修改还没有保存");
+    await wrapper.get('[data-testid="assignment-edit-discard-cancel"]').trigger("click");
+    expect(wrapper.get('[data-testid="assignment-edit-dialog"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="assignment-edit-backdrop"]').trigger("click");
+    expect(wrapper.get('[data-testid="assignment-edit-discard-dialog"]').text()).toContain("作业修改还没有保存");
+    await wrapper.get('[data-testid="assignment-edit-discard-confirm"]').trigger("click");
+    expect(wrapper.find('[data-testid="assignment-edit-dialog"]').exists()).toBe(false);
     expect(fetchMock).toHaveBeenCalledWith("/api/assignments/9?classId=2", expect.any(Object));
     expect(fetchMock).toHaveBeenCalledWith("/api/assignments/9/attachments?classId=2", expect.any(Object));
   });
@@ -162,6 +171,30 @@ describe("AssignmentDetailView", () => {
                 },
               ],
             },
+            {
+              id: 14,
+              studentId: 5,
+              studentNo: "20260003",
+              displayName: "李待补齐",
+              status: "partial",
+              submittedAt: "",
+              updatedAt: "2026-04-30T09:10:00Z",
+              reviewStatus: "pending",
+              teacherCommentSummary: "",
+              reviewedAt: "",
+              reviewerName: "",
+              items: [
+                {
+                  id: 202,
+                  name: "draft.txt",
+                  path: "/14/draft.txt",
+                  kind: "file",
+                  size: 12,
+                  downloadUrl: "/api/assignments/9/submissions/files/202/download?classId=2",
+                  previewUrl: "/api/assignments/9/submissions/files/202/preview?classId=2",
+                },
+              ],
+            },
           ],
           pagination: {
             page: 2,
@@ -199,6 +232,7 @@ describe("AssignmentDetailView", () => {
     expect(submissionRequestUrl).toContain("sort=studentNo-asc");
     expect(wrapper.get('[data-testid="assignment-submission-filter"]').element).toHaveProperty("value", "李");
     expect(wrapper.get('[data-testid="assignment-submission-pagination-summary"]').text()).toContain("第 2 / 3 页 · 共 121 条");
+    expect(wrapper.get('[data-testid="assignment-submission-status-badge-14"]').text()).toContain("待补齐");
   });
 
   it("refreshes the current assignment submissions from the toolbar", async () => {
@@ -793,6 +827,13 @@ describe("AssignmentDetailView", () => {
     expect(wrapper.get('[data-testid="assignment-submission-review-badge-12"]').classes()).toContain("status-pill");
     expect(wrapper.get('[data-testid="assignment-submission-review-badge-12"]').classes()).not.toContain("el-tag");
     expect(wrapper.get('[data-testid="assignment-submission-review-mark-all"]').text()).toContain("一键批改");
+    const submissionContent = wrapper.get('[data-testid="assignment-submission-content-12"]');
+    expect(submissionContent.text()).toContain("2 个文件");
+    expect(submissionContent.get('[data-testid="assignment-submission-content-meta-12"]').text()).toContain("已提交");
+    expect(submissionContent.get('[data-testid="assignment-submission-content-meta-12"]').text()).toContain("20260001-张小明");
+    expect(submissionContent.html().indexOf('data-testid="assignment-submission-status-badge-12"')).toBeLessThan(
+      submissionContent.html().indexOf('data-testid="assignment-submission-item-names-12"'),
+    );
 
     const rows = wrapper.findAll('[data-testid^="assignment-submission-row-"]');
     expect(rows[0].text()).toContain("张小明");
@@ -817,6 +858,9 @@ describe("AssignmentDetailView", () => {
     expect(wrapper.get('[data-testid="assignment-review-drawer-prev"]').classes()).toContain("assignment-review-drawer__nav-button");
     expect(wrapper.get('[data-testid="assignment-review-drawer-next"]').text()).toContain("下一个学生");
     expect(wrapper.get('[data-testid="assignment-review-drawer-next"]').classes()).toContain("assignment-review-drawer__nav-button");
+    expect(wrapper.getComponent(ElDrawer).props("closeOnClickModal")).toBe(true);
+    expect(typeof wrapper.getComponent(ElDrawer).props("beforeClose")).toBe("function");
+    expect(wrapper.get('[data-testid="assignment-submission-review-status-field-12"]').classes()).toContain("assignment-review-drawer__status-field");
     expect(wrapper.find('[data-testid="assignment-review-drawer-inline-preview"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="assignment-submission-file-tree"]').exists()).toBe(false);
     expect(wrapper.get('[data-testid="assignment-submission-files-view-list"]').exists()).toBe(true);
@@ -827,6 +871,11 @@ describe("AssignmentDetailView", () => {
     expect(wrapper.get('[data-testid="assignment-submission-file-grid"]').classes()).toContain("submission-file-grid--xlarge");
     expect(wrapper.get('[data-testid="assignment-submission-file-grid"]').text()).toContain("20260001-张小明");
     expect(wrapper.get('[data-testid="assignment-submission-file-grid"]').text()).toContain("photos");
+    await wrapper.get('[data-testid="assignment-submission-review-comment-12"]').setValue("临时评语");
+    await wrapper.get('[data-testid="assignment-submission-review-close"]').trigger("click");
+    expect(wrapper.get('[data-testid="assignment-review-close-discard-dialog"]').text()).toContain("批改内容还没有保存");
+    await wrapper.get('[data-testid="assignment-review-close-discard-cancel"]').trigger("click");
+    expect(wrapper.get('[data-testid="assignment-submission-review-drawer"]').text()).toContain("张小明");
     await wrapper.get('[data-testid="assignment-submission-files-view-list"]').trigger("click");
     await flushPromises();
     expect(wrapper.get('[data-testid="assignment-submission-file-list"]').text()).toContain("one.txt");
@@ -877,6 +926,282 @@ describe("AssignmentDetailView", () => {
     expect(wrapper.get('[data-testid="assignment-submission-row-12"]').text()).toContain("书写清晰");
     expect(wrapper.get('[data-testid="assignment-submission-row-12"]').text()).toContain("已批改");
     expect(wrapper.get('[data-testid="assignment-submission-row-12"]').text()).toContain("示例老师");
+  });
+
+  it("navigates the review drawer across paginated submissions with the current filters", async () => {
+    const makeSubmission = (id: number, studentNo: string, displayName: string) => ({
+      id,
+      studentId: id + 100,
+      studentNo,
+      displayName,
+      status: "submitted",
+      submittedAt: "2026-04-30T08:00:00Z",
+      updatedAt: "2026-04-30T08:30:00Z",
+      reviewStatus: "reviewed",
+      teacherCommentSummary: "",
+      reviewedAt: "2026-04-30T09:30:00Z",
+      reviewerName: "示例老师",
+      items: [],
+    });
+    const firstPageSubmissions = [
+      makeSubmission(12, "20260001", "张小明"),
+      makeSubmission(13, "20260002", "李小红"),
+    ];
+    const secondPageSubmissions = [
+      makeSubmission(14, "20260003", "王小蓝"),
+    ];
+    const fetchMock = vi.fn((url: RequestInfo | URL) => {
+      const requestUrl = String(url);
+      if (requestUrl === "/api/classes") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            classes: [{ id: 2, name: "一年级二班" }],
+          }),
+        });
+      }
+      if (requestUrl === "/api/assignments/9?classId=2") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 9,
+            classId: 2,
+            title: "单元复习",
+            description: "完成第 8 页题目",
+            dueAt: "2026-05-01T12:00:00Z",
+            status: "published",
+            createdAt: "2026-04-23T10:00:00Z",
+            updatedAt: "2026-04-23T10:30:00Z",
+          }),
+        });
+      }
+      if (requestUrl === "/api/assignments/9/attachments?classId=2") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [],
+          }),
+        });
+      }
+      if (requestUrl === "/api/assignments/9/submissions?classId=2&q=%E5%88%86%E9%A1%B5&sort=studentNo-asc&page=1&pageSize=60") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            submissions: firstPageSubmissions,
+            pagination: {
+              page: 1,
+              pageSize: 60,
+              total: 3,
+              totalPages: 2,
+            },
+          }),
+        });
+      }
+      if (requestUrl === "/api/assignments/9/submissions?classId=2&q=%E5%88%86%E9%A1%B5&sort=studentNo-asc&page=2&pageSize=60") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            submissions: secondPageSubmissions,
+            pagination: {
+              page: 2,
+              pageSize: 60,
+              total: 3,
+              totalPages: 2,
+            },
+          }),
+        });
+      }
+      throw new Error(`unexpected request: ${requestUrl}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/assignments/classes/:classId", component: { template: "<div>作业管理页</div>" } },
+        { path: "/assignments/classes/:classId/:assignmentId", component: AssignmentDetailView },
+      ],
+    });
+    await router.push("/assignments/classes/2/9?q=分页&sort=studentNo-asc&page=1&pageSize=60");
+    await router.isReady();
+
+    const wrapper = mount(AssignmentDetailView, {
+      global: {
+        plugins: [createPinia(), router],
+      },
+    });
+
+    await flushPromises();
+
+    await wrapper.get('[data-testid="assignment-submission-open-13"]').trigger("click");
+    expect(wrapper.get('[data-testid="assignment-submission-review-drawer"]').text()).toContain("李小红");
+    expect(wrapper.get('[data-testid="assignment-review-drawer-next"]').attributes("disabled")).toBeUndefined();
+
+    await wrapper.get('[data-testid="assignment-review-drawer-next"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    expect(router.currentRoute.value.query.page).toBe("2");
+    expect(wrapper.get('[data-testid="assignment-submission-review-drawer"]').text()).toContain("王小蓝");
+    expect(wrapper.get('[data-testid="assignment-review-drawer-next"]').attributes("disabled")).toBeDefined();
+    expect(wrapper.get('[data-testid="assignment-review-drawer-prev"]').attributes("disabled")).toBeUndefined();
+
+    await wrapper.get('[data-testid="assignment-review-drawer-prev"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="assignment-submission-review-drawer"]').text()).toContain("李小红");
+    expect(wrapper.get('[data-testid="assignment-review-drawer-next"]').attributes("disabled")).toBeUndefined();
+    expect(wrapper.get('[data-testid="assignment-review-drawer-prev"]').attributes("disabled")).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/assignments/9/submissions?classId=2&q=%E5%88%86%E9%A1%B5&sort=studentNo-asc&page=2&pageSize=60",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/assignments/9/submissions?classId=2&q=%E5%88%86%E9%A1%B5&sort=studentNo-asc&page=1&pageSize=60",
+      expect.any(Object),
+    );
+
+    await wrapper.get('[data-testid="assignment-review-drawer-prev"]').trigger("click");
+    expect(wrapper.get('[data-testid="assignment-submission-review-drawer"]').text()).toContain("张小明");
+    expect(wrapper.get('[data-testid="assignment-review-drawer-prev"]').attributes("disabled")).toBeDefined();
+  });
+
+  it("keeps the review drawer mounted while cross-page drawer navigation loads", async () => {
+    const makeSubmission = (id: number, studentNo: string, displayName: string) => ({
+      id,
+      studentId: id + 100,
+      studentNo,
+      displayName,
+      status: "submitted",
+      submittedAt: "2026-04-30T08:00:00Z",
+      updatedAt: "2026-04-30T08:30:00Z",
+      reviewStatus: "reviewed",
+      teacherCommentSummary: "",
+      reviewedAt: "2026-04-30T09:30:00Z",
+      reviewerName: "示例老师",
+      items: [],
+    });
+    const firstPageSubmissions = [
+      makeSubmission(12, "20260001", "张小明"),
+      makeSubmission(13, "20260002", "李小红"),
+    ];
+    const secondPageSubmissions = [
+      makeSubmission(14, "20260003", "王小蓝"),
+    ];
+    type FetchResponse = {
+      ok: true;
+      status: number;
+      json: () => Promise<unknown>;
+    };
+    let resolvePage2Submissions: (value: FetchResponse) => void = () => undefined;
+    const page2Submissions = new Promise<FetchResponse>((resolve) => {
+      resolvePage2Submissions = resolve;
+    });
+    const fetchMock = vi.fn((url: RequestInfo | URL) => {
+      const requestUrl = String(url);
+      if (requestUrl === "/api/classes") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            classes: [{ id: 2, name: "一年级二班" }],
+          }),
+        });
+      }
+      if (requestUrl === "/api/assignments/9?classId=2") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 9,
+            classId: 2,
+            title: "单元复习",
+            description: "完成第 8 页题目",
+            dueAt: "2026-05-01T12:00:00Z",
+            status: "published",
+            createdAt: "2026-04-23T10:00:00Z",
+            updatedAt: "2026-04-23T10:30:00Z",
+          }),
+        });
+      }
+      if (requestUrl === "/api/assignments/9/attachments?classId=2") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [],
+          }),
+        });
+      }
+      if (requestUrl === "/api/assignments/9/submissions?classId=2&sort=updatedAt-desc&page=1&pageSize=60") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            submissions: firstPageSubmissions,
+            pagination: {
+              page: 1,
+              pageSize: 60,
+              total: 3,
+              totalPages: 2,
+            },
+          }),
+        });
+      }
+      if (requestUrl === "/api/assignments/9/submissions?classId=2&sort=updatedAt-desc&page=2&pageSize=60") {
+        return page2Submissions;
+      }
+      throw new Error(`unexpected request: ${requestUrl}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/assignments/classes/:classId", component: { template: "<div>作业管理页</div>" } },
+        { path: "/assignments/classes/:classId/:assignmentId", component: AssignmentDetailView },
+      ],
+    });
+    await router.push("/assignments/classes/2/9?pageSize=60");
+    await router.isReady();
+
+    const wrapper = mount(AssignmentDetailView, {
+      global: {
+        plugins: [createPinia(), router],
+      },
+    });
+
+    await flushPromises();
+    await wrapper.get('[data-testid="assignment-submission-open-13"]').trigger("click");
+    await wrapper.get('[data-testid="assignment-review-drawer-next"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="assignment-submission-review-drawer"]').text()).toContain("李小红");
+    expect(wrapper.find(".classes-page__detail-layout").exists()).toBe(true);
+
+    resolvePage2Submissions({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        submissions: secondPageSubmissions,
+        pagination: {
+          page: 2,
+          pageSize: 60,
+          total: 3,
+          totalPages: 2,
+        },
+      }),
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="assignment-submission-review-drawer"]').text()).toContain("王小蓝");
   });
 
   it("uses the backend statistics snapshot for assignment-detail missing statistics", async () => {

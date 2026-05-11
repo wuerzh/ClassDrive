@@ -62,6 +62,26 @@ export function useStudentAssignmentDetail(assignmentId: ComputedRef<number>) {
     }
   }
 
+  async function deleteSubmissionFile(fileId: number) {
+    if (!assignment.value) {
+      return;
+    }
+    errorText.value = "";
+    try {
+      const response = await api.deleteStudentSubmissionFile({
+        assignmentId: assignmentId.value,
+        fileId,
+      });
+      assignment.value = {
+        ...assignment.value,
+        submission: response.submission,
+      };
+      items.value = response.items ?? [];
+    } catch (error) {
+      errorText.value = error instanceof ApiError ? error.message : "删除提交文件失败";
+    }
+  }
+
   return {
     assignment,
     assignmentAttachments,
@@ -71,5 +91,6 @@ export function useStudentAssignmentDetail(assignmentId: ComputedRef<number>) {
     errorText,
     loadAssignment,
     submitAssignment,
+    deleteSubmissionFile,
   };
 }

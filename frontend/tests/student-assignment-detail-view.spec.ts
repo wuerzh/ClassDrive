@@ -88,9 +88,14 @@ describe("StudentAssignmentDetailView", () => {
     expect(overview.find(".student-assignment-detail__meta-band").exists()).toBe(true);
     expect(overview.find(".student-assignment-detail__support-strip").exists()).toBe(true);
     expect(submitPanel.text()).toContain("提交作业");
-    expect(wrapper.get('[data-testid="student-submission-submit"]').attributes("disabled")).toBeDefined();
-    expect(wrapper.get('[data-testid="student-submission-submit"]').text()).toContain("选好文件后提交");
-    expect(wrapper.get('[data-testid="student-submission-submit-feedback"]').text()).toContain("先选择");
+    expect(wrapper.get('[data-testid="student-submission-submit"]').attributes("disabled")).toBeUndefined();
+    expect(wrapper.get('[data-testid="student-submission-submit"]').text()).toContain("选择并提交");
+    expect(wrapper.get('[data-testid="student-submission-picker-hint"]').text()).toContain("确认后才会提交");
+    expect(wrapper.find('[data-testid="student-submission-submit-feedback"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="student-submission-input"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="student-submission-directory-input"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="student-submission-file-open"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="student-submission-directory-open"]').exists()).toBe(false);
     expect(requirement.text()).toContain("不限，至少 1 个文件");
     expect(requirement.text()).toContain("PDF、Word");
     expect(requirement.classes()).toContain("student-assignment-detail__requirement--responsive");
@@ -107,9 +112,22 @@ describe("StudentAssignmentDetailView", () => {
     expect(wrapper.find('[data-testid="student-assignment-attachment-panel"]').exists()).toBe(false);
     expect(wrapper.text()).not.toContain("老师上传的作业资料可直接下载查看。");
     expect(wrapper.get('a[href="/api/student/assignments/9/attachments/201/download"]').text()).toBe("老师讲义.pdf");
+
+    await wrapper.get('[data-testid="student-submission-submit"]').trigger("click");
+
+    const dialog = wrapper.get('[data-testid="student-submission-dialog"]');
+    expect(dialog.text()).toContain("提交作业");
+    expect(dialog.get('[data-testid="student-submission-dialog-summary"]').text()).toContain("按左侧作业要求选择文件或文件夹");
+    expect(dialog.text()).not.toContain("单个文件不超过");
+    expect(dialog.find('[data-testid="student-submission-file-open"]').exists()).toBe(true);
+    expect(dialog.find('[data-testid="student-submission-directory-open"]').exists()).toBe(true);
+    expect(dialog.get('[data-testid="student-submission-file-open"]').attributes("for")).toBe("student-submission-file-input");
+    expect(dialog.get('[data-testid="student-submission-directory-open"]').attributes("for")).toBe("student-submission-directory-input");
+    expect(dialog.get('[data-testid="student-submission-dialog-submit"]').attributes("disabled")).toBeDefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("allows resubmission before deadline and shows refreshed attachments", async () => {
+  it("adds files to the current submission and lets students delete files before deadline", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -160,6 +178,38 @@ describe("StudentAssignmentDetailView", () => {
           },
           items: [
             {
+              id: 101,
+              name: "old.txt",
+              path: "/2/old.txt",
+              kind: "file",
+              size: 12,
+              downloadUrl: "/api/student/assignments/9/submission/files/101/download",
+              previewUrl: "",
+            },
+            {
+              id: 102,
+              name: "new.txt",
+              path: "/2/new.txt",
+              kind: "file",
+              size: 24,
+              downloadUrl: "/api/student/assignments/9/submission/files/102/download",
+              previewUrl: "",
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          submission: {
+            id: 2,
+            status: "submitted",
+            submittedAt: "2026-04-29T08:00:00Z",
+            updatedAt: "2026-04-30T08:10:00Z",
+          },
+          items: [
+            {
               id: 102,
               name: "new.txt",
               path: "/2/new.txt",
@@ -191,24 +241,45 @@ describe("StudentAssignmentDetailView", () => {
 
     await flushPromises();
 
-    expect(wrapper.get('[data-testid="student-assignment-submit-panel"]').text()).toContain("重新提交");
+    expect(wrapper.get('[data-testid="student-assignment-submit-panel"]').text()).toContain("添加到当前提交");
+    expect(wrapper.get('[data-testid="student-submission-submit"]').text()).toContain("继续添加");
     expect(wrapper.get('[data-testid="student-assignment-current-submission"]').text()).toContain("当前提交");
-    expect(wrapper.text()).not.toContain("可下载当前提交，下次课继续完成后可在截止前重新提交。");
     expect(wrapper.get('[data-testid="student-assignment-submission-grid"]').text()).toContain("old.txt");
     expect(wrapper.get('[data-testid="student-assignment-submission-download-101"]').attributes("href")).toBe(
       "/api/student/assignments/9/submission/files/101/download",
     );
 
+    await wrapper.get('[data-testid="student-submission-submit"]').trigger("click");
+    expect(wrapper.get('[data-testid="student-submission-dialog"]').text()).toContain("添加到当前提交");
+
     const input = wrapper.get('[data-testid="student-submission-input"]').element as HTMLInputElement;
     Object.defineProperty(input, "files", {
       configurable: true,
-      value: [new File(["new submission"], "new.txt", { type: "text/plain" })],
+      value: [
+        new File(["draft"], "draft.txt", { type: "text/plain" }),
+        new File(["new submission"], "new.txt", { type: "text/plain" }),
+      ],
     });
 
     await wrapper.get('[data-testid="student-submission-input"]').trigger("change");
-    expect(wrapper.get('[data-testid="student-submission-submit"]').attributes("disabled")).toBeUndefined();
-    expect(wrapper.get('[data-testid="student-submission-submit"]').text()).toContain("重新提交所选文件");
-    await wrapper.get('[data-testid="student-submission-submit"]').trigger("click");
+    expect(wrapper.get('[data-testid="student-submission-selection"]').text()).toContain("draft.txt");
+    expect(wrapper.get('[data-testid="student-submission-selection"]').text()).toContain("new.txt");
+    await wrapper.get('[data-testid="student-submission-selected-remove-0"]').trigger("click");
+    expect(wrapper.get('[data-testid="student-submission-selection"]').text()).not.toContain("draft.txt");
+    expect(wrapper.get('[data-testid="student-submission-selection"]').text()).toContain("new.txt");
+    expect(wrapper.get('[data-testid="student-submission-dialog-submit"]').attributes("disabled")).toBeUndefined();
+
+    await wrapper.get('[data-testid="student-submission-dialog-submit"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.get('[data-testid="student-submission-confirm-dialog"]').text()).toContain("确认添加这 1 个文件");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await wrapper.get('[data-testid="student-submission-confirm-cancel"]').trigger("click");
+    expect(wrapper.find('[data-testid="student-submission-confirm-dialog"]').exists()).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await wrapper.get('[data-testid="student-submission-dialog-submit"]').trigger("click");
+    await wrapper.get('[data-testid="student-submission-confirm-confirm"]').trigger("click");
     await flushPromises();
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -218,9 +289,96 @@ describe("StudentAssignmentDetailView", () => {
         body: expect.any(FormData),
       }),
     );
+    expect(wrapper.find('[data-testid="student-submission-dialog"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("new.txt");
+    expect(wrapper.text()).toContain("old.txt");
+    expect(wrapper.get('[data-testid="student-submission-submit-feedback"]').text()).toContain("已添加");
+
+    await wrapper.get('[data-testid="student-assignment-submission-delete-101"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.get('[data-testid="student-assignment-submission-delete-confirm-dialog"]').text()).toContain("old.txt");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await wrapper.get('[data-testid="student-assignment-submission-delete-confirm-cancel"]').trigger("click");
+    expect(wrapper.find('[data-testid="student-assignment-submission-delete-confirm-dialog"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("old.txt");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await wrapper.get('[data-testid="student-assignment-submission-delete-101"]').trigger("click");
+    await wrapper.get('[data-testid="student-assignment-submission-delete-confirm-confirm"]').trigger("click");
+    await flushPromises();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/student/assignments/9/submission/files/101",
+      expect.objectContaining({
+        method: "DELETE",
+      }),
+    );
     expect(wrapper.text()).toContain("new.txt");
     expect(wrapper.text()).not.toContain("old.txt");
-    expect(wrapper.get('[data-testid="student-submission-submit-feedback"]').text()).toContain("提交成功");
+    expect(wrapper.get('[data-testid="student-submission-submit-feedback"]').text()).toContain("已删除");
+  });
+
+  it("asks before closing the submission dialog with unsubmitted selected files", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: 29,
+        classId: 1,
+        title: "草稿选择",
+        description: "测试关闭确认",
+        dueAt: "2026-05-03T12:00:00Z",
+        status: "published",
+        createdAt: "2026-04-23T10:00:00Z",
+        updatedAt: "2026-04-23T10:30:00Z",
+        overdue: false,
+        submission: null,
+        submissionConstraints: {
+          allowedTypesLabel: "PDF、Word、Excel、PPT、TXT、JPG、PNG、ZIP",
+          maxFileSizeBytes: 100 * 1024 * 1024,
+          maxFileSizeLabel: "100 MB",
+        },
+        items: [],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/student/assignments", component: { template: "<div>列表页</div>" } },
+        { path: "/student/assignments/:assignmentId", component: StudentAssignmentDetailView },
+      ],
+    });
+    await router.push("/student/assignments/29");
+    await router.isReady();
+
+    const wrapper = mount(StudentAssignmentDetailView, {
+      global: {
+        plugins: [createPinia(), router],
+      },
+    });
+
+    await flushPromises();
+    await wrapper.get('[data-testid="student-submission-submit"]').trigger("click");
+
+    const input = wrapper.get('[data-testid="student-submission-input"]').element as HTMLInputElement;
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [new File(["draft"], "draft.txt", { type: "text/plain" })],
+    });
+    await wrapper.get('[data-testid="student-submission-input"]').trigger("change");
+
+    await wrapper.get('[data-testid="student-submission-dialog-close"]').trigger("click");
+    expect(wrapper.get('[data-testid="student-submission-discard-dialog"]').text()).toContain("放弃本次选择");
+    await wrapper.get('[data-testid="student-submission-discard-cancel"]').trigger("click");
+    expect(wrapper.find('[data-testid="student-submission-dialog"]').exists()).toBe(true);
+
+    await wrapper.get('[data-testid="student-submission-dialog-close"]').trigger("click");
+    await wrapper.get('[data-testid="student-submission-discard-confirm"]').trigger("click");
+    expect(wrapper.find('[data-testid="student-submission-dialog"]').exists()).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("shows current submitted files as one thumbnail grid and opens images in a dialog", async () => {
@@ -400,6 +558,9 @@ describe("StudentAssignmentDetailView", () => {
 
     await flushPromises();
 
+    await wrapper.get('[data-testid="student-submission-submit"]').trigger("click");
+    expect(wrapper.get('[data-testid="student-submission-dialog"]').text()).toContain("提交作业");
+
     const input = wrapper.get('[data-testid="student-submission-input"]').element as HTMLInputElement;
     Object.defineProperty(input, "files", {
       configurable: true,
@@ -407,7 +568,8 @@ describe("StudentAssignmentDetailView", () => {
     });
 
     await wrapper.get('[data-testid="student-submission-input"]').trigger("change");
-    await wrapper.get('[data-testid="student-submission-submit"]').trigger("click");
+    await wrapper.get('[data-testid="student-submission-dialog-submit"]').trigger("click");
+    await wrapper.get('[data-testid="student-submission-confirm-confirm"]').trigger("click");
     await flushPromises();
 
     const requirement = wrapper.get('[data-testid="student-assignment-submission-requirement"]');
@@ -486,6 +648,11 @@ describe("StudentAssignmentDetailView", () => {
 
     await flushPromises();
 
+    expect(wrapper.find('[data-testid="student-submission-file-open"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="student-submission-directory-open"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="student-submission-submit"]').text()).toBe("选择并提交");
+    await wrapper.get('[data-testid="student-submission-submit"]').trigger("click");
+    expect(wrapper.get('[data-testid="student-submission-dialog"]').text()).toContain("提交作业");
     expect(wrapper.find('[data-testid="student-submission-file-open"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="student-submission-directory-open"]').exists()).toBe(true);
 
@@ -502,7 +669,9 @@ describe("StudentAssignmentDetailView", () => {
 
     await wrapper.get('[data-testid="student-submission-directory-input"]').trigger("change");
     expect(wrapper.get('[data-testid="student-submission-selection"]').text()).toContain("已选择文件夹：20260001-张小明（1 个文件）");
-    await wrapper.get('[data-testid="student-submission-submit"]').trigger("click");
+    await wrapper.get('[data-testid="student-submission-dialog-submit"]').trigger("click");
+    expect(wrapper.get('[data-testid="student-submission-confirm-dialog"]').text()).toContain("确认提交这 1 个文件");
+    await wrapper.get('[data-testid="student-submission-confirm-confirm"]').trigger("click");
     await flushPromises();
 
     const submitCall = fetchMock.mock.calls.find(([url]) => url === "/api/student/assignments/15/submission");
@@ -562,10 +731,17 @@ describe("StudentAssignmentDetailView", () => {
     expect(requirement.text()).toContain("文件夹，至少 5 个文件");
     expect(requirement.text()).toContain("JPG、PNG、ZIP");
     expect(requirement.text()).toContain("100 MB");
-    expect(wrapper.get('[data-testid="student-submission-picker-hint"]').text()).toContain("请选择整个文件夹");
+    expect(wrapper.get('[data-testid="student-submission-picker-hint"]').text()).toContain("在弹窗中选择文件");
+    expect(wrapper.find('[data-testid="student-submission-file-open"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="student-submission-input"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="student-submission-directory-open"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="student-submission-submit"]').text()).toBe("选择并提交");
+
+    await wrapper.get('[data-testid="student-submission-submit"]').trigger("click");
     expect(wrapper.find('[data-testid="student-submission-file-open"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="student-submission-input"]').exists()).toBe(false);
     expect(wrapper.get('[data-testid="student-submission-directory-open"]').text()).toBe("选择文件夹");
+    expect(wrapper.get('[data-testid="student-submission-directory-input"]').attributes("accept")).toContain(".png");
   });
 
   it("only offers file picking for file-only assignments", async () => {
@@ -613,7 +789,13 @@ describe("StudentAssignmentDetailView", () => {
 
     await flushPromises();
 
-    expect(wrapper.get('[data-testid="student-submission-picker-hint"]').text()).toContain("本次仅收文件");
+    expect(wrapper.get('[data-testid="student-submission-picker-hint"]').text()).toContain("在弹窗中选择文件");
+    expect(wrapper.get('[data-testid="student-submission-submit"]').text()).toBe("选择并提交");
+    expect(wrapper.find('[data-testid="student-submission-file-open"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="student-submission-directory-open"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="student-submission-directory-input"]').exists()).toBe(false);
+
+    await wrapper.get('[data-testid="student-submission-submit"]').trigger("click");
     expect(wrapper.get('[data-testid="student-submission-file-open"]').text()).toBe("选择文件");
     expect(wrapper.find('[data-testid="student-submission-directory-open"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="student-submission-directory-input"]').exists()).toBe(false);
@@ -666,6 +848,7 @@ describe("StudentAssignmentDetailView", () => {
 
     await flushPromises();
 
+    await wrapper.get('[data-testid="student-submission-submit"]').trigger("click");
     const input = wrapper.get('[data-testid="student-submission-input"]').element as HTMLInputElement;
     Object.defineProperty(input, "files", {
       configurable: true,
@@ -674,7 +857,9 @@ describe("StudentAssignmentDetailView", () => {
 
     await wrapper.get('[data-testid="student-submission-input"]').trigger("change");
     expect(wrapper.get('[data-testid="student-submission-input"]').attributes("accept")).toContain(".png");
-    await wrapper.get('[data-testid="student-submission-submit"]').trigger("click");
+    expect(wrapper.get('[data-testid="student-submission-dialog-submit"]').attributes("disabled")).toBeDefined();
+    expect(wrapper.get('[data-testid="student-submission-dialog"]').text()).toContain("仅支持图片文件（JPG、JPEG、PNG）");
+    await wrapper.get('[data-testid="student-submission-dialog-submit"]').trigger("click");
     await flushPromises();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
