@@ -103,7 +103,12 @@
       </form>
 
       <footer class="login-card__footer" data-testid="login-footer">
-        <span>Author: wuerzh | Ver: 1.1 | WX/QQ: 709868663</span>
+        <span>Author: <a
+            href="https://github.com/wuerzh/ClassDrive"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="app-author-link"
+          >wuerzh</a> | Ver: 1.2 | WX/QQ: 709868663</span>
       </footer>
     </section>
   </div>
@@ -204,5 +209,10 @@ async function submitStudent() {
   text-align: center;
   color: var(--text-muted);
   font-size: 13px;
+}
+
+.login-card__footer a {
+  color: inherit;
+  text-underline-offset: 2px;
 }
 </style>

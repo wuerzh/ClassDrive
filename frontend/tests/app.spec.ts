@@ -77,7 +77,10 @@ describe("ClassDrive app shell", () => {
     expect(wrapper.text()).toContain("老师登录");
     expect(wrapper.text()).toContain("学生登录");
     expect(wrapper.text()).not.toContain("老师和学生共用当前 IP+端口入口");
-    expect(wrapper.get('[data-testid="login-footer"]').text()).toBe("Author: wuerzh | Ver: 1.1 | WX/QQ: 709868663");
+    const loginFooter = wrapper.get('[data-testid="login-footer"]');
+    expect(loginFooter.text()).toBe("Author: wuerzh | Ver: 1.2 | WX/QQ: 709868663");
+    expect(loginFooter.get('[data-testid="app-author-link"]').attributes("href")).toBe("https://github.com/wuerzh/ClassDrive");
+    expect(loginFooter.get('[data-testid="app-author-link"]').attributes("target")).toBe("_blank");
     expect(wrapper.find('[data-testid="teacher-login-username"]').exists()).toBe(true);
     expect(wrapper.get('[data-testid="teacher-login-username"]').element).toHaveProperty("value", "");
     expect(wrapper.find('[data-testid="student-login-join-code"]').exists()).toBe(false);
@@ -265,9 +268,12 @@ describe("ClassDrive app shell", () => {
     expect(wrapper.get('[data-testid="theme-toggle"]').exists()).toBe(true);
     const sidebarFooterLines = wrapper.get('[data-testid="sidebar-footer"]').findAll("span").map((line) => line.text());
     expect(sidebarFooterLines).toEqual([
-      "Author: wuerzh | Ver: 1.1",
+      "Author: wuerzh | Ver: 1.2",
       "WX/QQ: 709868663",
     ]);
+    expect(wrapper.get('[data-testid="sidebar-footer"]').get('[data-testid="app-author-link"]').attributes("href")).toBe(
+      "https://github.com/wuerzh/ClassDrive",
+    );
     expect(Array.from(new Set(wrapper.findAll(".sidebar__link").map((link) => link.text())))).toEqual([
       "老师资料",
       "公共资料",

@@ -299,6 +299,11 @@ textarea {
   line-height: 1.45;
 }
 
+.sidebar__footer a {
+  color: inherit;
+  text-underline-offset: 2px;
+}
+
 .topbar {
   z-index: 1000;
   position: sticky;

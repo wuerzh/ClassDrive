@@ -25,7 +25,12 @@
         </section>
       </nav>
       <footer class="sidebar__footer" data-testid="student-sidebar-footer">
-      <span>Author: wuerzh | Ver: 1.1</span>
+        <span>Author: <a
+            href="https://github.com/wuerzh/ClassDrive"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="app-author-link"
+          >wuerzh</a> | Ver: 1.2</span>
         <span>WX/QQ: 709868663</span>
       </footer>
     </aside>
