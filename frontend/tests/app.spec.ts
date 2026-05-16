@@ -54,6 +54,26 @@ describe("ClassDrive app shell", () => {
     expect(router.currentRoute.value.fullPath).toBe("/login");
   });
 
+  it("redirects the legacy student management route back to class management", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const authStore = useAuthStore(pinia);
+    authStore.user = {
+      id: 1,
+      username: "teacher",
+      displayName: "示例老师",
+    };
+    authStore.initialized = true;
+
+    const router = createAppRouter(pinia);
+    await router.push("/students");
+    await router.isReady();
+    await flushPromises();
+
+    expect(router.currentRoute.value.fullPath).toBe("/classes");
+  });
+
+
   it("switches between teacher and student login tabs on the shared root entry", async () => {
     const pinia = createPinia();
     setActivePinia(pinia);
@@ -77,8 +97,9 @@ describe("ClassDrive app shell", () => {
     expect(wrapper.text()).toContain("老师登录");
     expect(wrapper.text()).toContain("学生登录");
     expect(wrapper.text()).not.toContain("老师和学生共用当前 IP+端口入口");
+    expect(wrapper.get('[data-testid="app-brand-logo"]').attributes("alt")).toBe("ClassDrive");
     const loginFooter = wrapper.get('[data-testid="login-footer"]');
-    expect(loginFooter.text()).toBe("Author: wuerzh | Ver: 1.2 | WX/QQ: 709868663");
+    expect(loginFooter.text()).toBe("Author: wuerzh | Ver: 1.3 | WX/QQ: 709868663");
     expect(loginFooter.get('[data-testid="app-author-link"]').attributes("href")).toBe("https://github.com/wuerzh/ClassDrive");
     expect(loginFooter.get('[data-testid="app-author-link"]').attributes("target")).toBe("_blank");
     expect(wrapper.find('[data-testid="teacher-login-username"]').exists()).toBe(true);
@@ -259,8 +280,10 @@ describe("ClassDrive app shell", () => {
     expect(navigationText).toContain("系统与账号");
     expect(navigationText).toContain("老师资料");
     expect(navigationText).toContain("班级管理");
+    expect(navigationText).not.toContain("学生管理");
     expect(wrapper.text()).toContain("示例老师");
     expect(wrapper.find(".sidebar__link.is-placeholder").exists()).toBe(false);
+    expect(wrapper.get('[data-testid="sidebar-brand-logo"]').attributes("alt")).toBe("ClassDrive");
     expect(wrapper.find(".topbar h1").exists()).toBe(false);
     expect(wrapper.find(".topbar__label").exists()).toBe(false);
     expect(wrapper.get(".topbar").text()).not.toContain("ClassDrive");
@@ -268,7 +291,7 @@ describe("ClassDrive app shell", () => {
     expect(wrapper.get('[data-testid="theme-toggle"]').exists()).toBe(true);
     const sidebarFooterLines = wrapper.get('[data-testid="sidebar-footer"]').findAll("span").map((line) => line.text());
     expect(sidebarFooterLines).toEqual([
-      "Author: wuerzh | Ver: 1.2",
+      "Author: wuerzh | Ver: 1.3",
       "WX/QQ: 709868663",
     ]);
     expect(wrapper.get('[data-testid="sidebar-footer"]').get('[data-testid="app-author-link"]').attributes("href")).toBe(
@@ -279,7 +302,6 @@ describe("ClassDrive app shell", () => {
       "公共资料",
       "班级资料",
       "班级管理",
-      "学生管理",
       "作业管理",
       "设置",
     ]);

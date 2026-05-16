@@ -18,6 +18,7 @@ const screenshotNames = [
   "teacher-assignment-detail.png",
   "teacher-assignment-missing.png",
   "teacher-assignment-review.png",
+  "teacher-audit-logs.png",
   "student-assignments.png",
   "student-assignment-detail.png",
 ];
@@ -124,7 +125,7 @@ function absoluteUrl(baseUrl, pathname) {
 
 async function newPage(browser, baseUrl) {
   const context = await browser.newContext({
-    viewport: { width: 1440, height: 1120 },
+    viewport: { width: 1920, height: 1200 },
     baseURL: baseUrl,
   });
   const page = await context.newPage();
@@ -189,11 +190,15 @@ async function seedDemoData(page) {
     body: JSON.stringify({ name: "软件实训 1 班" }),
   });
   const joinCode = await teacherRequest(page, `/api/classes/${classItem.id}/join-code`, { method: "POST" });
-  const students = [
-    { studentNo: "20260101", displayName: "李明" },
-    { studentNo: "20260102", displayName: "王佳" },
-    { studentNo: "20260103", displayName: "陈一" },
+  const studentNames = [
+    "李明", "王佳", "陈一", "刘晨", "赵雨", "孙航", "周倩", "吴越", "郑宁", "冯可",
+    "蒋然", "许诺", "高扬", "何晴", "唐森", "马思", "罗欣", "邱泽", "谢安", "宋琳",
+    "彭宇", "袁琪", "戴维", "顾嘉", "夏宁", "程一", "沈越", "姚可", "陆然", "钟宁",
   ];
+  const students = studentNames.map((displayName, index) => ({
+    studentNo: `202601${String(index + 1).padStart(2, "0")}`,
+    displayName,
+  }));
   for (const student of students) {
     await teacherRequest(page, "/api/students", {
       method: "POST",
@@ -330,9 +335,14 @@ async function captureTeacherPages(page, baseUrl, demo) {
   await page.getByText(demo.classItem.name).waitFor();
   await screenshot(page, "teacher-classes.png");
 
-  await page.goto(absoluteUrl(baseUrl, `/students?classId=${demo.classItem.id}`));
+  await page.goto(absoluteUrl(baseUrl, "/classes"));
+  await page.getByTestId(`class-students-${demo.classItem.id}`).click();
+  await page.getByTestId("class-students-drawer").waitFor();
+  await page.locator(".students-page__table-frame").waitFor();
   await page.getByText("李明").waitFor();
+  await page.getByText("钟宁").waitFor();
   await screenshot(page, "teacher-students.png");
+  await page.getByTestId("class-students-drawer-close").click();
 
   await page.goto(absoluteUrl(baseUrl, `/assignments/classes/${demo.classItem.id}`));
   await page.getByText(demo.assignments.main.title).waitFor();
@@ -350,6 +360,7 @@ async function captureTeacherPages(page, baseUrl, demo) {
 
   await page.getByTestId("assignment-stats-open").click();
   await page.getByTestId("assignment-missing-table").waitFor();
+  await page.locator(".assignments-page__stats-table-frame").waitFor();
   await screenshot(page, "teacher-assignment-statistics.png");
   await page.getByTestId("assignment-missing-close").click();
 
@@ -359,12 +370,18 @@ async function captureTeacherPages(page, baseUrl, demo) {
 
   await page.getByTestId("assignment-detail-missing-open").click();
   await page.getByTestId("assignment-detail-missing-table").waitFor();
+  await page.locator(".assignment-missing-dialog__table-frame").waitFor();
   await screenshot(page, "teacher-assignment-missing.png");
   await page.getByTestId("assignment-detail-missing-close").click();
 
   await page.locator('[data-testid^="assignment-submission-open-"]').first().click();
   await page.getByTestId("assignment-submission-review-drawer").waitFor();
   await screenshot(page, "teacher-assignment-review.png");
+
+  await page.goto(absoluteUrl(baseUrl, "/settings/logs"));
+  await page.getByTestId("audit-logs-table").waitFor();
+  await page.locator(".audit-logs-page__table-frame").waitFor();
+  await screenshot(page, "teacher-audit-logs.png");
 }
 
 async function captureStudentPages(page, baseUrl, demo) {
@@ -401,6 +418,8 @@ async function main() {
     contexts.push(firstStudent.context);
     const secondStudent = await prepareStudent(browser, server.baseUrl, demo, demo.students[1], "student456", "网页作品-王佳", 1);
     contexts.push(secondStudent.context);
+    const thirdStudent = await prepareStudent(browser, server.baseUrl, demo, demo.students[2], "student789", "网页作品-陈一");
+    contexts.push(thirdStudent.context);
 
     await captureTeacherPages(teacher.page, server.baseUrl, demo);
     await captureStudentPages(firstStudent.page, server.baseUrl, demo);

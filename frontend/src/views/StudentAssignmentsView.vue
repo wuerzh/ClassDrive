@@ -80,7 +80,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { RouterLink, useRouter } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import type { StudentAssignmentItem } from "@/api/client";
 import PaginationControls from "@/components/PaginationControls.vue";
 import StatePanel from "@/components/StatePanel.vue";
@@ -91,17 +91,16 @@ import {
 } from "@/composables/useStudentAssignments";
 import { studentAssignmentStatusTone, uiCopy } from "@/utils/ui-copy";
 
-const { assignments, loading, errorText, loadAssignments } = useStudentAssignments();
+const { assignments, pagination, loading, errorText, loadAssignments } = useStudentAssignments();
 const router = useRouter();
+const route = useRoute();
 const assignmentPageSizeOptions = [1, 30, 50, 60, 100];
-const assignmentPage = ref(1);
-const assignmentPageSize = ref(30);
-const totalAssignments = computed(() => assignments.value.length);
-const totalAssignmentPages = computed(() => Math.max(1, Math.ceil(Math.max(totalAssignments.value, 1) / assignmentPageSize.value)));
-const visibleAssignments = computed(() => {
-  const start = (assignmentPage.value - 1) * assignmentPageSize.value;
-  return assignments.value.slice(start, start + assignmentPageSize.value);
-});
+const defaultAssignmentPageSize = 30;
+const assignmentPage = ref(parsePositiveInt(route.query.page, 1));
+const assignmentPageSize = ref(normalizeAssignmentPageSize(parsePositiveInt(route.query.pageSize, defaultAssignmentPageSize)));
+const totalAssignments = computed(() => pagination.value.total);
+const totalAssignmentPages = computed(() => Math.max(1, pagination.value.totalPages));
+const visibleAssignments = computed(() => assignments.value);
 
 function studentAssignmentActionLabel(assignment: StudentAssignmentItem) {
   if (!assignment.overdue && !assignment.submission) {
@@ -114,35 +113,79 @@ async function openAssignment(assignmentId: number) {
   await router.push(`/student/assignments/${assignmentId}`);
 }
 
-function updateAssignmentPageSize(value: number) {
-  if (!assignmentPageSizeOptions.includes(value)) {
-    return;
-  }
-  assignmentPageSize.value = value;
-  assignmentPage.value = 1;
+function parsePositiveInt(value: unknown, fallback: number): number {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallback;
 }
 
-function goPrevAssignmentPage() {
+function normalizeAssignmentPageSize(value: number): number {
+  if (!assignmentPageSizeOptions.includes(value)) {
+    return defaultAssignmentPageSize;
+  }
+  return value;
+}
+
+async function replaceAssignmentRoute(overrides: { page?: number; pageSize?: number }): Promise<void> {
+  const nextPage = overrides.page ?? assignmentPage.value;
+  const nextPageSize = normalizeAssignmentPageSize(overrides.pageSize ?? assignmentPageSize.value);
+  const query: Record<string, string> = {};
+  if (nextPage > 1) {
+    query.page = String(nextPage);
+  }
+  if (nextPageSize !== defaultAssignmentPageSize) {
+    query.pageSize = String(nextPageSize);
+  }
+  await router.replace({ path: route.path, query });
+}
+
+function syncPagingFromRoute(): void {
+  assignmentPage.value = parsePositiveInt(route.query.page, 1);
+  assignmentPageSize.value = normalizeAssignmentPageSize(parsePositiveInt(route.query.pageSize, defaultAssignmentPageSize));
+}
+
+async function loadAssignmentsPage(): Promise<void> {
+  syncPagingFromRoute();
+  await loadAssignments({
+    page: assignmentPage.value,
+    pageSize: assignmentPageSize.value,
+  });
+}
+
+async function updateAssignmentPageSize(value: number) {
+  assignmentPageSize.value = value;
+  assignmentPage.value = 1;
+  await replaceAssignmentRoute({ page: 1, pageSize: value });
+}
+
+async function goPrevAssignmentPage() {
   if (assignmentPage.value <= 1) {
     return;
   }
-  assignmentPage.value -= 1;
+  await replaceAssignmentRoute({ page: assignmentPage.value - 1 });
 }
 
-function goNextAssignmentPage() {
+async function goNextAssignmentPage() {
   if (assignmentPage.value >= totalAssignmentPages.value) {
     return;
   }
-  assignmentPage.value += 1;
+  await replaceAssignmentRoute({ page: assignmentPage.value + 1 });
 }
 
 onMounted(async () => {
-  await loadAssignments();
+  await loadAssignmentsPage();
 });
+
+watch(
+  () => route.query,
+  () => {
+    void loadAssignmentsPage();
+  },
+);
 
 watch(totalAssignmentPages, (nextTotalPages) => {
   if (assignmentPage.value > nextTotalPages) {
-    assignmentPage.value = nextTotalPages;
+    void replaceAssignmentRoute({ page: nextTotalPages });
   }
 });
 </script>

@@ -7,7 +7,6 @@ import FilesView from "@/views/FilesView.vue";
 import ClassesView from "@/views/ClassesView.vue";
 import AssignmentsView from "@/views/AssignmentsView.vue";
 import AssignmentDetailView from "@/views/AssignmentDetailView.vue";
-import StudentsView from "@/views/StudentsView.vue";
 import SettingsView from "@/views/SettingsView.vue";
 import TeacherProfileSettingsView from "@/views/TeacherProfileSettingsView.vue";
 import SystemSettingsView from "@/views/SystemSettingsView.vue";
@@ -156,9 +155,7 @@ export function createAppRouter(pinia?: Pinia) {
           },
           {
             path: "students",
-            name: "students",
-            component: StudentsView,
-            meta: { title: "学生管理" },
+            redirect: "/classes",
           },
           {
             path: "settings",

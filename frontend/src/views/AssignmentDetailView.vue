@@ -568,13 +568,13 @@
         />
     </section>
 
-    <div v-if="assignment && assignmentMissingStatsOpen" class="copy-dialog-backdrop">
+    <div v-if="assignment && assignmentMissingStatsOpen" class="copy-dialog-backdrop" @click.self="closeAssignmentMissingStatsDialog">
       <section class="copy-dialog assignment-missing-dialog" data-testid="assignment-detail-missing-dialog">
         <div class="copy-dialog__header">
           <div>
             <h3 class="copy-dialog__title">{{ `${assignment.title} · 未交名单` }}</h3>
           </div>
-          <button class="button button--ghost" type="button" data-testid="assignment-detail-missing-close" @click="assignmentMissingStatsOpen = false">
+          <button class="button button--ghost" type="button" data-testid="assignment-detail-missing-close" @click="closeAssignmentMissingStatsDialog">
             关闭
           </button>
         </div>
@@ -608,24 +608,29 @@
             @prev="goPrevAssignmentMissingStatsPage"
             @next="goNextAssignmentMissingStatsPage"
           />
-          <table
+          <div
             v-if="!assignmentMissingStatsLoading && assignmentMissingStatsRows.length"
-            class="files-table assignment-missing-dialog__table"
-            data-testid="assignment-detail-missing-table"
+            class="assignment-missing-dialog__table-frame"
+            :style="assignmentMissingStatsTableFrameStyle"
           >
-            <thead>
-              <tr>
-                <th>学生</th>
-                <th>学号</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in paginatedAssignmentMissingStatsRows" :key="row.studentId">
-                <td>{{ row.displayName }}</td>
-                <td>{{ row.studentNo }}</td>
-              </tr>
-            </tbody>
-          </table>
+            <table
+              class="files-table assignment-missing-dialog__table"
+              data-testid="assignment-detail-missing-table"
+            >
+              <thead>
+                <tr>
+                  <th>学生</th>
+                  <th>学号</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in paginatedAssignmentMissingStatsRows" :key="row.studentId">
+                  <td>{{ row.displayName }}</td>
+                  <td>{{ row.studentNo }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
     </div>
@@ -1186,6 +1191,9 @@ const paginatedAssignmentMissingStatsRows = computed(() => {
   const start = (assignmentMissingStatsPage.value - 1) * assignmentMissingStatsPageSize.value;
   return assignmentMissingStatsRows.value.slice(start, start + assignmentMissingStatsPageSize.value);
 });
+const assignmentMissingStatsTableFrameStyle = computed<Record<string, string>>(() => ({
+  "--assignment-missing-page-size": String(assignmentMissingStatsPageSize.value),
+}));
 
 function formatDateTime(value: string) {
   if (!value) {
@@ -1683,6 +1691,10 @@ async function openAssignmentMissingStatsDialog() {
   await loadAssignmentMissingStats();
 }
 
+function closeAssignmentMissingStatsDialog() {
+  assignmentMissingStatsOpen.value = false;
+}
+
 async function loadAssignmentMissingStats() {
   if (!currentClassId.value || !currentAssignmentId.value) {
     assignmentMissingStatsRows.value = [];
@@ -2019,8 +2031,37 @@ watch(visibleSubmissions, (items) => {
   font-weight: 700;
 }
 
+.assignment-missing-dialog__table-frame {
+  align-self: start;
+  width: 100%;
+  min-height: calc(44px * (var(--assignment-missing-page-size) + 1));
+  overflow-x: auto;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  box-shadow: var(--shadow-soft);
+}
+
 .assignment-missing-dialog__table {
+  width: 100%;
+  min-width: 480px;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   table-layout: fixed;
+}
+
+.assignment-missing-dialog__table thead tr,
+.assignment-missing-dialog__table tbody tr {
+  height: 44px;
+}
+
+.assignment-missing-dialog__table th,
+.assignment-missing-dialog__table td {
+  box-sizing: border-box;
+  height: 44px;
+  max-height: 44px;
 }
 
 .assignment-submissions-workspace__header {

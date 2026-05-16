@@ -10,7 +10,7 @@ describe("StudentAssignmentDetailView", () => {
     vi.unstubAllGlobals();
   });
 
-  it("places assignment details and teacher attachments before the submission action area", async () => {
+  it("keeps assignment context and submission workflow in one clear card", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -64,14 +64,23 @@ describe("StudentAssignmentDetailView", () => {
 
     await flushPromises();
 
-    const overview = wrapper.get('[data-testid="student-assignment-overview"]');
+    const overviewCard = wrapper.findAll(".student-assignment-detail__card")[0];
+    const submissionCard = wrapper.findAll(".student-assignment-detail__card")[1];
+    const brief = overviewCard.get('[data-testid="student-assignment-brief"]');
     const submitPanel = wrapper.get('[data-testid="student-assignment-submit-panel"]');
     const currentSubmission = wrapper.get('[data-testid="student-assignment-current-submission"]');
-    const attachmentList = overview.get('[data-testid="student-assignment-attachment-list"]');
-    const attachmentBlock = overview.get('[data-testid="student-assignment-attachment-block"]');
-    const requirement = overview.get('[data-testid="student-assignment-submission-requirement"]');
+    const attachmentList = overviewCard.get('[data-testid="student-assignment-attachment-list"]');
+    const attachmentBlock = overviewCard.get('[data-testid="student-assignment-attachment-block"]');
+    const requirement = overviewCard.get('[data-testid="student-assignment-submission-requirement"]');
 
     expect(wrapper.find(".student-assignment-detail__header").exists()).toBe(false);
+    expect(wrapper.find(".student-assignment-detail__card--info").exists()).toBe(false);
+    expect(wrapper.findAll(".student-assignment-detail__card")).toHaveLength(2);
+    expect(overviewCard.text()).toContain("第一单元练习");
+    expect(overviewCard.text()).toContain("完成练习册第 8 页");
+    expect(overviewCard.text()).toContain("提交开放");
+    expect(overviewCard.text()).toContain("未提交");
+    expect(brief.element.compareDocumentPosition(requirement.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(wrapper.find('[data-testid="student-assignment-detail-workspace"]').exists()).toBe(true);
     expect(wrapper.get('[data-testid="student-assignment-detail-back"]').text()).toContain("返回");
     expect(wrapper.find('[data-testid="student-assignment-detail-refresh"]').exists()).toBe(true);
@@ -82,15 +91,16 @@ describe("StudentAssignmentDetailView", () => {
     expect(toolbar.text()).not.toContain("第一单元练习");
     expect(wrapper.find(".student-assignment-detail__toolbar-title").exists()).toBe(false);
     expect(wrapper.find(".classes-page__eyebrow").exists()).toBe(false);
-    expect(overview.text()).toContain("第一单元练习");
-    expect(overview.text()).toContain("完成练习册第 8 页");
-    expect(overview.find(".student-assignment-detail__hero").exists()).toBe(true);
-    expect(overview.find(".student-assignment-detail__meta-band").exists()).toBe(true);
-    expect(overview.find(".student-assignment-detail__support-strip").exists()).toBe(true);
+    expect(overviewCard.find(".student-assignment-detail__hero").exists()).toBe(true);
+    expect(overviewCard.find(".student-assignment-detail__requirement-bar").exists()).toBe(true);
+    expect(overviewCard.find(".student-assignment-detail__support-strip").exists()).toBe(false);
+    expect(submissionCard.find('[data-testid="student-submission-steps"]').text()).toContain("选择文件");
+    expect(submissionCard.find('[data-testid="student-submission-steps"]').text()).toContain("核对清单");
+    expect(submissionCard.find('[data-testid="student-submission-steps"]').text()).toContain("确认提交");
     expect(submitPanel.text()).toContain("提交作业");
     expect(wrapper.get('[data-testid="student-submission-submit"]').attributes("disabled")).toBeUndefined();
     expect(wrapper.get('[data-testid="student-submission-submit"]').text()).toContain("选择并提交");
-    expect(wrapper.get('[data-testid="student-submission-picker-hint"]').text()).toContain("确认后才会提交");
+    expect(wrapper.get('[data-testid="student-submission-picker-hint"]').text()).toContain("选择后会进入确认窗口");
     expect(wrapper.find('[data-testid="student-submission-submit-feedback"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="student-submission-input"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="student-submission-directory-input"]').exists()).toBe(false);
@@ -98,15 +108,11 @@ describe("StudentAssignmentDetailView", () => {
     expect(wrapper.find('[data-testid="student-submission-directory-open"]').exists()).toBe(false);
     expect(requirement.text()).toContain("不限，至少 1 个文件");
     expect(requirement.text()).toContain("PDF、Word");
-    expect(requirement.classes()).toContain("student-assignment-detail__requirement--responsive");
+    expect(requirement.classes()).toContain("student-assignment-detail__requirement-bar");
     expect(requirement.classes()).not.toContain("student-assignment-detail__requirement--nowrap");
-    expect(requirement.find(".student-assignment-detail__requirement-item--format").exists()).toBe(true);
-    expect(requirement.find(".student-assignment-detail__requirement-item--size").exists()).toBe(true);
-    expect(requirement.find(".student-assignment-detail__requirement-item--due").exists()).toBe(true);
-    expect(overview.element.compareDocumentPosition(submitPanel.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(attachmentBlock.element.compareDocumentPosition(submitPanel.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(submitPanel.element.compareDocumentPosition(currentSubmission.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(submitPanel.find('[data-testid="student-assignment-attachment-block"]').exists()).toBe(false);
-    expect(attachmentBlock.element.compareDocumentPosition(requirement.element) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
     expect(wrapper.text()).toContain("作业附件");
     expect(wrapper.text()).toContain("老师讲义.pdf");
     expect(wrapper.find('[data-testid="student-assignment-attachment-panel"]').exists()).toBe(false);
@@ -117,7 +123,7 @@ describe("StudentAssignmentDetailView", () => {
 
     const dialog = wrapper.get('[data-testid="student-submission-dialog"]');
     expect(dialog.text()).toContain("提交作业");
-    expect(dialog.get('[data-testid="student-submission-dialog-summary"]').text()).toContain("按左侧作业要求选择文件或文件夹");
+    expect(dialog.get('[data-testid="student-submission-dialog-summary"]').text()).toContain("按本页提交要求选择文件或文件夹");
     expect(dialog.text()).not.toContain("单个文件不超过");
     expect(dialog.find('[data-testid="student-submission-file-open"]').exists()).toBe(true);
     expect(dialog.find('[data-testid="student-submission-directory-open"]').exists()).toBe(true);

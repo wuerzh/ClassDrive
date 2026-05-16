@@ -32,77 +32,105 @@
         @next="goNextClassPage"
       />
 
-      <table class="files-table classes-management__table" data-testid="classes-table">
-        <thead>
-          <tr>
-            <th>
-              <button
-                class="table-sort-button"
-                :class="{ 'is-active': classSort === 'name-asc' || classSort === 'name-desc' }"
-                type="button"
-                data-testid="class-sort-name"
-                @click="toggleClassNameSort"
-              >
-                班级名称
-                <span class="table-sort-button__mark">{{ classSortMark("name") }}</span>
-              </button>
-            </th>
-            <th>注册码</th>
-            <th>
-              <button
-                class="table-sort-button"
-                :class="{ 'is-active': classSort === 'registration-desc' || classSort === 'registration-asc' }"
-                type="button"
-                data-testid="class-sort-registration"
-                @click="toggleClassRegistrationSort"
-              >
-                状态
-                <span class="table-sort-button__mark">{{ classSortMark("registration") }}</span>
-              </button>
-            </th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in listedClasses" :key="item.id" :data-testid="`class-row-${item.id}`">
-            <td>
-              <strong class="classes-management__name" :data-testid="`class-row-name-${item.id}`">{{ item.name }}</strong>
-            </td>
-            <td class="classes-management__code-cell" :data-testid="`class-row-status-${item.id}`">
-              {{ item.joinCode || "未生成" }}
-            </td>
-            <td>
-              <span class="classes-management__status" :class="{ 'classes-management__status--active': item.joinCodeStatus === 'active' }">
-                {{ item.joinCodeStatus === "active" ? "开放注册" : "暂停注册" }}
-              </span>
-            </td>
-            <td class="files-table__actions">
-              <div class="classes-management__actions" :data-testid="`class-row-actions-${item.id}`">
+      <div class="classes-management__table-wrap">
+        <table class="files-table classes-management__table" data-testid="classes-table">
+          <thead>
+            <tr>
+              <th>
                 <button
-                  class="button"
-                  :class="item.joinCodeStatus === 'active' ? 'button--accent' : 'button--secondary'"
+                  class="table-sort-button"
+                  :class="{ 'is-active': classSort === 'name-asc' || classSort === 'name-desc' }"
                   type="button"
-                  :data-testid="`class-registration-toggle-${item.id}`"
-                  @click="toggleRegistration(item)"
+                  data-testid="class-sort-name"
+                  @click="toggleClassNameSort"
                 >
-                  {{ item.joinCodeStatus === "active" ? "关闭注册" : "开放注册" }}
+                  班级名称
+                  <span class="table-sort-button__mark">{{ classSortMark("name") }}</span>
                 </button>
-                <button class="button button--ghost" type="button" :data-testid="`class-edit-${item.id}`" @click="openEditDialog(item)">
-                  编辑
+              </th>
+              <th>注册码</th>
+              <th>
+                <button
+                  class="table-sort-button"
+                  :class="{ 'is-active': classSort === 'registration-desc' || classSort === 'registration-asc' }"
+                  type="button"
+                  data-testid="class-sort-registration"
+                  @click="toggleClassRegistrationSort"
+                >
+                  状态
+                  <span class="table-sort-button__mark">{{ classSortMark("registration") }}</span>
                 </button>
-                <button class="button button--ghost text-button--danger" type="button" :data-testid="`class-delete-${item.id}`" @click="openDeleteDialog(item)">
-                  删除
-                </button>
-              </div>
-            </td>
-          </tr>
-          <tr v-if="!listedClasses.length">
-            <td colspan="4" class="files-table__empty">{{ classKeyword.trim() ? "当前筛选下没有班级。" : "当前还没有班级数据。" }}</td>
-          </tr>
-        </tbody>
-      </table>
+              </th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in listedClasses" :key="item.id" :data-testid="`class-row-${item.id}`">
+              <td>
+                <strong class="classes-management__name" :data-testid="`class-row-name-${item.id}`">{{ item.name }}</strong>
+              </td>
+              <td class="classes-management__code-cell" :data-testid="`class-row-status-${item.id}`">
+                {{ item.joinCode || "未生成" }}
+              </td>
+              <td>
+                <span class="classes-management__status" :class="{ 'classes-management__status--active': item.joinCodeStatus === 'active' }">
+                  {{ item.joinCodeStatus === "active" ? "开放注册" : "暂停注册" }}
+                </span>
+              </td>
+              <td class="files-table__actions">
+                <div class="classes-management__actions" :data-testid="`class-row-actions-${item.id}`">
+                  <button
+                    class="button"
+                    :class="item.joinCodeStatus === 'active' ? 'button--accent' : 'button--secondary'"
+                    type="button"
+                    :data-testid="`class-registration-toggle-${item.id}`"
+                    @click="toggleRegistration(item)"
+                  >
+                    {{ item.joinCodeStatus === "active" ? "关闭注册" : "开放注册" }}
+                  </button>
+                  <button class="button button--ghost" type="button" :data-testid="`class-students-${item.id}`" @click="openStudentsDrawer(item)">
+                    学生管理
+                  </button>
+                  <button class="button button--ghost" type="button" :data-testid="`class-edit-${item.id}`" @click="openEditDialog(item)">
+                    编辑
+                  </button>
+                  <button class="button button--ghost text-button--danger" type="button" :data-testid="`class-delete-${item.id}`" @click="openDeleteDialog(item)">
+                    删除
+                  </button>
+                </div>
+              </td>
+            </tr>
+            <tr v-if="!listedClasses.length">
+              <td colspan="4" class="files-table__empty">{{ classKeyword.trim() ? "当前筛选下没有班级。" : "当前还没有班级数据。" }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
   </section>
+
+  <div v-if="studentDrawerClass" class="class-students-drawer" data-testid="class-students-drawer" role="dialog" aria-modal="true" @click.self="closeStudentsDrawer">
+    <section class="class-students-drawer__panel">
+      <header class="class-students-drawer__header">
+        <div class="class-students-drawer__title-block">
+          <div class="class-students-drawer__eyebrow">学生名单</div>
+          <h2 class="class-students-drawer__title">{{ studentDrawerClass.name }}</h2>
+          <div class="class-students-drawer__meta">
+            <span class="classes-management__status" :class="{ 'classes-management__status--active': studentDrawerClass.joinCodeStatus === 'active' }">
+              {{ classRegistrationLabel(studentDrawerClass) }}
+            </span>
+            <span v-if="studentDrawerClass.joinCode" class="class-students-drawer__join-code">注册码 {{ studentDrawerClass.joinCode }}</span>
+          </div>
+        </div>
+        <button class="button button--ghost" type="button" data-testid="class-students-drawer-close" @click="closeStudentsDrawer">关闭</button>
+      </header>
+
+      <StudentRosterPanel
+        :class-id="studentDrawerClass.id"
+        :class-name="studentDrawerClass.name"
+      />
+    </section>
+  </div>
 
   <TextInputDialog
     :open="createDialogOpen"
@@ -146,6 +174,7 @@ import { ref, watch } from "vue";
 import { useRoute, useRouter, type LocationQueryRaw } from "vue-router";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import PaginationControls from "@/components/PaginationControls.vue";
+import StudentRosterPanel from "@/components/StudentRosterPanel.vue";
 import TextInputDialog from "@/components/TextInputDialog.vue";
 import { api, ApiError, type ClassItem } from "@/api/client";
 import { useClassesStore } from "@/stores/classes";
@@ -172,6 +201,7 @@ const totalClassPages = ref(1);
 const createDialogOpen = ref(false);
 const editingClass = ref<ClassItem | null>(null);
 const pendingDeleteClass = ref<ClassItem | null>(null);
+const studentDrawerClass = ref<ClassItem | null>(null);
 
 function parsePositiveInt(raw: unknown, fallback: number) {
   const parsed = Number(raw);
@@ -286,6 +316,18 @@ function classSortMark(column: "name" | "registration") {
   return classSort.value === "name-asc" ? "↑" : "";
 }
 
+function classRegistrationLabel(item: ClassItem): string {
+  return item.joinCodeStatus === "active" ? "开放注册" : "暂停注册";
+}
+
+function openStudentsDrawer(item: ClassItem): void {
+  studentDrawerClass.value = item;
+}
+
+function closeStudentsDrawer(): void {
+  studentDrawerClass.value = null;
+}
+
 async function updateClassPageSize(value: number) {
   await replaceClassesRoute({ pageSize: value, page: 1 });
 }
@@ -375,6 +417,15 @@ async function toggleRegistration(item: ClassItem) {
           }
         : current,
     );
+    if (studentDrawerClass.value?.id === item.id) {
+      studentDrawerClass.value = {
+        ...studentDrawerClass.value,
+        joinCode: result.joinCode,
+        joinCodeHint: result.joinCodeHint,
+        joinCodeStatus: result.joinCodeStatus,
+        registrationEnabled: result.registrationEnabled,
+      };
+    }
     toastStore.push(enabled ? "success" : "warning", enabled ? "已开放注册" : "已关闭注册");
     await refreshClassSources();
   } catch (error) {
@@ -417,28 +468,34 @@ watch(() => route.fullPath, () => {
   width: min(220px, 100%);
 }
 
+.classes-management__table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
 .classes-management__table {
   table-layout: fixed;
+  min-width: 720px;
 }
 
 .classes-management__table th:nth-child(1),
 .classes-management__table td:nth-child(1) {
-  width: 26%;
+  width: 22%;
 }
 
 .classes-management__table th:nth-child(2),
 .classes-management__table td:nth-child(2) {
-  width: 22%;
+  width: 15%;
 }
 
 .classes-management__table th:nth-child(3),
 .classes-management__table td:nth-child(3) {
-  width: 20%;
+  width: 13%;
 }
 
 .classes-management__table th:nth-child(4),
 .classes-management__table td:nth-child(4) {
-  width: 32%;
+  width: 50%;
 }
 
 .classes-management__name {
@@ -474,36 +531,125 @@ watch(() => route.fullPath, () => {
   display: flex;
   flex-wrap: nowrap;
   gap: 6px;
+  align-items: center;
 }
 
 .classes-management__actions .button {
   flex: 0 0 auto;
-  min-height: 38px;
-  padding: 7px 10px;
-  border-radius: 12px;
+  min-height: 36px;
+  padding: 5px 9px;
+  border-radius: 10px;
   white-space: nowrap;
+  font-size: 0.9rem;
+}
+
+.class-students-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 4500;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(15, 23, 42, 0.42);
+  padding: 0;
+  overscroll-behavior: contain;
+}
+
+.class-students-drawer__panel {
+  display: grid;
+  grid-template-rows: auto auto;
+  align-content: start;
+  gap: 16px;
+  width: min(1120px, calc(100vw - 28px));
+  height: 100vh;
+  padding: 20px;
+  overflow: auto;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-soft);
+  box-shadow: var(--shadow-strong);
+}
+
+.class-students-drawer__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.class-students-drawer__title-block {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.class-students-drawer__eyebrow {
+  color: var(--accent-primary);
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.class-students-drawer__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: clamp(1.25rem, 2vw, 1.6rem);
+  line-height: 1.25;
+}
+
+.class-students-drawer__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.class-students-drawer__join-code {
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  font-weight: 700;
 }
 
 @media (max-width: 960px) {
   .classes-management__filters {
-    align-items: stretch;
+    align-items: center;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 12px;
   }
 
   .classes-management__search-group {
-    flex-basis: 100%;
-    margin-left: 0;
+    flex: 0 0 310px;
+    margin-left: auto;
   }
 
   .classes-management__search-group .copy-dialog__search {
-    width: 100%;
+    width: min(220px, 100%);
   }
 
   .classes-management__table {
-    table-layout: auto;
+    min-width: 840px;
   }
 
   .classes-management__actions {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+  }
+}
+
+@media (max-width: 720px) {
+  .class-students-drawer__panel {
+    width: 100vw;
+    padding: 16px;
+  }
+
+  .class-students-drawer__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .class-students-drawer__header .button {
+    align-self: flex-start;
   }
 }
 </style>

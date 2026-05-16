@@ -519,7 +519,9 @@ test("老师端主要页面逐页可达且班级资料可切换到空班级", as
   await page.getByTestId("sidebar-nav").getByRole("link", { name: "作业管理", exact: true }).click();
   await expect(page.locator(".classes-page")).toBeVisible();
 
-  await page.getByRole("link", { name: "学生管理", exact: true }).click();
+  await expect(page.getByTestId("sidebar-nav").getByRole("link", { name: "学生管理", exact: true })).toHaveCount(0);
+  await page.goto("/students");
+  await expect(page).toHaveURL(/\/classes$/);
   await expect(page.locator(".classes-page")).toBeVisible();
 
   await page.getByRole("link", { name: "设置", exact: true }).click();
@@ -877,24 +879,28 @@ test("老师可搜索文件、切换排序并切到网格视图，并保留当�
   await expect(page.getByTestId("files-pagination-summary")).toContainText("第 2 /");
 });
 
-test("老师可在学生页使用服务端搜索分页，并在刷新后保留状态", async ({ page }) => {
+test("老师可在班级学生抽屉使用服务端搜索分页", async ({ page }) => {
   await loginAsTeacher(page);
 
   const suffix = Date.now().toString();
+  const className = `学生分页班级-${suffix}`;
   const createdClass = await teacherRequest<{ id: number }>(page, "/api/classes", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      name: `学生分页班级-${suffix}`,
+      name: className,
     }),
   });
 
-  const matchingStudents = [
-    { studentNo: `41${suffix.slice(-4)}1`, displayName: `筛选学生-A-${suffix.slice(-2)}` },
-    { studentNo: `41${suffix.slice(-4)}2`, displayName: `筛选学生-B-${suffix.slice(-2)}` },
-  ];
+  const matchingStudents = Array.from({ length: 31 }, (_, index) => {
+    const order = String(index + 1).padStart(2, "0");
+    return {
+      studentNo: `41${suffix.slice(-4)}${order}`,
+      displayName: `筛选学生-${order}-${suffix.slice(-2)}`,
+    };
+  });
   const unrelatedStudent = { studentNo: `41${suffix.slice(-4)}9`, displayName: `无关学生-${suffix.slice(-2)}` };
 
   for (const student of [...matchingStudents, unrelatedStudent]) {
@@ -911,27 +917,20 @@ test("老师可在学生页使用服务端搜索分页，并在刷新后保留�
     });
   }
 
-  await page.goto(`/students?classId=${createdClass.id}`);
+  await page.goto("/classes");
+  const classRow = page.locator('tr[data-testid^="class-row-"]', { hasText: className });
+  await classRow.locator('[data-testid^="class-students-"]').click();
+  await expect(page.getByTestId("class-students-drawer")).toBeVisible();
+  await expect(page.getByTestId("class-students-drawer")).toContainText(className);
+  await expect(page.getByTestId("students-class-select")).toHaveCount(0);
+
   await page.getByTestId("student-search-input").fill("筛选学生");
   await page.getByTestId("student-sort-name").click();
-  await page.getByTestId("student-page-size-select").selectOption("1");
   await expect(page.getByTestId("student-pagination-summary")).toContainText("第 1 / 2 页");
   await page.getByTestId("student-page-next").click();
 
-  await expect(page).toHaveURL(new RegExp(`classId=${createdClass.id}`));
-  await expect(page).toHaveURL(/q=%E7%AD%9B%E9%80%89%E5%AD%A6%E7%94%9F/);
-  await expect(page).toHaveURL(/sort=displayName-asc/);
-  await expect(page).toHaveURL(/page=2/);
-  await expect(page).toHaveURL(/pageSize=1/);
   await expect(page.getByTestId("student-pagination-summary")).toContainText("第 2 / 2 页");
-  await expect(page.locator('tr[data-testid^="student-row-"]')).toContainText(matchingStudents[1].displayName);
-
-  await page.reload();
-  await expect(page.getByTestId("student-search-input")).toHaveValue("筛选学生");
-  await expect(page.getByTestId("student-sort-name")).toHaveClass(/is-active/);
-  await expect(page.getByTestId("student-page-size-select")).toHaveValue("1");
-  await expect(page.getByTestId("student-pagination-summary")).toContainText("第 2 / 2 页");
-  await expect(page.locator('tr[data-testid^="student-row-"]')).toContainText(matchingStudents[1].displayName);
+  await expect(page.getByTestId("class-students-drawer").locator('tr[data-testid^="student-row-"]')).toContainText(matchingStudents[30].displayName);
 });
 
 test("老师可在作业页使用服务端搜索分页，并在刷新后保留状态", async ({ page }) => {
@@ -1123,8 +1122,12 @@ test("老师可通过 Excel 导入学生并进入作业管理入口", async ({ p
   const studentNo = `2026${suffix.slice(-4)}`;
   const studentName = `导入学生-${suffix.slice(-4)}`;
 
-  await page.getByRole("link", { name: "学生管理" }).click();
-  await expect(page).toHaveURL(/\/students/);
+  await page.getByRole("link", { name: "班级管理" }).click();
+  await expect(page).toHaveURL(/\/classes$/);
+
+  const firstClassRow = page.locator('tr[data-testid^="class-row-"]').first();
+  await firstClassRow.locator('[data-testid^="class-students-"]').click();
+  await expect(page.getByTestId("class-students-drawer")).toBeVisible();
 
   await page.getByTestId("student-import-open").click();
   await expect(page.getByTestId("student-template-xlsx")).toBeVisible();
@@ -1140,8 +1143,9 @@ test("老师可通过 Excel 导入学生并进入作业管理入口", async ({ p
   });
   await page.getByTestId("student-import-file-submit").click();
   await expect(page.getByText("学生已批量导入")).toBeVisible();
-  await expect(page.locator('tr[data-testid^="student-row-"]', { hasText: studentName })).toBeVisible();
+  await expect(page.getByTestId("class-students-drawer").locator('tr[data-testid^="student-row-"]', { hasText: studentName })).toBeVisible();
 
+  await page.getByTestId("class-students-drawer-close").click();
   await page.getByTestId("sidebar-nav").getByRole("link", { name: "作业管理", exact: true }).click();
   await expect(page).toHaveURL(/\/assignments$/);
   await expect(page.getByTestId("assignments-table")).toBeVisible();

@@ -117,6 +117,7 @@ type studentAssignmentPayload struct {
 
 type studentAssignmentsResponse struct {
 	Assignments           []studentAssignmentPayload `json:"assignments"`
+	Pagination            paginationPayload          `json:"pagination"`
 	SubmissionConstraints struct {
 		AllowedTypesLabel string `json:"allowedTypesLabel"`
 		MaxFileSizeBytes  int64  `json:"maxFileSizeBytes"`
@@ -241,7 +242,8 @@ type filesResponse struct {
 }
 
 type loginLogsResponse struct {
-	Logs []testLoginLogPayload `json:"logs"`
+	Logs       []testLoginLogPayload `json:"logs"`
+	Pagination paginationPayload     `json:"pagination"`
 }
 
 type testLoginLogPayload struct {
@@ -256,7 +258,25 @@ type testLoginLogPayload struct {
 }
 
 type operationLogsResponse struct {
-	Logs []testOperationLogPayload `json:"logs"`
+	Logs       []testOperationLogPayload `json:"logs"`
+	Pagination paginationPayload         `json:"pagination"`
+}
+
+type auditLogsResponse struct {
+	Logs       []testAuditLogPayload `json:"logs"`
+	Pagination paginationPayload     `json:"pagination"`
+}
+
+type testAuditLogPayload struct {
+	ID         int64  `json:"id"`
+	LogType    string `json:"logType"`
+	OccurredAt string `json:"occurredAt"`
+	ActorType  string `json:"actorType"`
+	Account    string `json:"account"`
+	ActorName  string `json:"actorName"`
+	Action     string `json:"action"`
+	Result     string `json:"result"`
+	IPAddress  string `json:"ipAddress"`
 }
 
 type clearAuditLogsResponse struct {
@@ -272,6 +292,7 @@ type testOperationLogPayload struct {
 	Method     string `json:"method"`
 	Path       string `json:"path"`
 	StatusCode int    `json:"statusCode"`
+	IPAddress  string `json:"ipAddress"`
 	Summary    string `json:"summary"`
 }
 
@@ -396,6 +417,7 @@ func TestTeacherLoginInvalidatesPreviousSessionAndRecordsLoginLogs(t *testing.T)
 		"password": "wrong-password",
 	}))
 	failedLoginRequest.Header.Set("Content-Type", "application/json")
+	failedLoginRequest.Header.Set("X-Forwarded-For", "192.0.2.10")
 	app.ServeHTTP(failedLoginRecorder, failedLoginRequest)
 	if failedLoginRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected failed login 401, got %d: %s", failedLoginRecorder.Code, failedLoginRecorder.Body.String())
@@ -419,6 +441,53 @@ func TestTeacherLoginInvalidatesPreviousSessionAndRecordsLoginLogs(t *testing.T)
 	}
 	if logs.Logs[1].Status != "success" || logs.Logs[1].ActorName != "示例老师" {
 		t.Fatalf("expected previous successful login log, got %#v", logs.Logs[1])
+	}
+}
+
+func TestTeacherLogoutRecordsLoginLogs(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	cookie := loginAndGetCookie(t, app)
+
+	logoutRecorder := httptest.NewRecorder()
+	logoutRequest := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	logoutRequest.AddCookie(cookie)
+	app.ServeHTTP(logoutRecorder, logoutRequest)
+	if logoutRecorder.Code != http.StatusOK {
+		t.Fatalf("expected logout 200, got %d: %s", logoutRecorder.Code, logoutRecorder.Body.String())
+	}
+
+	logs, err := app.listLoginLogs(loginLogFilters{ActorType: "teacher", Query: "admin", Limit: 100})
+	if err != nil {
+		t.Fatalf("list login logs: %v", err)
+	}
+	if len(logs) == 0 || logs[0].Message != "老师退出登录" || logs[0].Username != "admin" {
+		t.Fatalf("expected teacher logout login log, got %#v", logs)
+	}
+}
+
+func TestStudentLogoutRecordsLoginLogs(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	prepareStudentAuthFixture(t, app, "ABCD1234", "20260001", "张小明")
+	cookie := activateAndLoginStudent(t, app, "ABCD1234", "20260001", "student123")
+
+	logoutRecorder := httptest.NewRecorder()
+	logoutRequest := httptest.NewRequest(http.MethodPost, "/api/student/auth/logout", nil)
+	logoutRequest.AddCookie(cookie)
+	app.ServeHTTP(logoutRecorder, logoutRequest)
+	if logoutRecorder.Code != http.StatusOK {
+		t.Fatalf("expected logout 200, got %d: %s", logoutRecorder.Code, logoutRecorder.Body.String())
+	}
+
+	logs, err := app.listLoginLogs(loginLogFilters{ActorType: "student", Query: "20260001", Limit: 100})
+	if err != nil {
+		t.Fatalf("list login logs: %v", err)
+	}
+	if len(logs) == 0 || logs[0].Message != "学生退出登录" || logs[0].Username != "20260001" {
+		t.Fatalf("expected student logout login log, got %#v", logs)
 	}
 }
 
@@ -608,7 +677,7 @@ func TestTeacherOperationLogsRecordMutatingRequests(t *testing.T) {
 	if latest.Method != http.MethodGet || latest.Path != "/api/files/"+itoa(downloadEntry.ID)+"/download" || latest.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected operation log %#v", latest)
 	}
-	if latest.ActorName != "示例老师" || latest.Summary != "下载文件" {
+	if latest.ActorName != "示例老师" || latest.Summary != "下载文件" || latest.IPAddress == "" {
 		t.Fatalf("unexpected operation actor/summary %#v", latest)
 	}
 }
@@ -625,13 +694,14 @@ func TestAuditLogsSupportFilters(t *testing.T) {
 		"password": "wrong-password",
 	}))
 	failedLoginRequest.Header.Set("Content-Type", "application/json")
+	failedLoginRequest.Header.Set("X-Forwarded-For", "192.0.2.10")
 	app.ServeHTTP(failedLoginRecorder, failedLoginRequest)
 	if failedLoginRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected failed login 401, got %d: %s", failedLoginRecorder.Code, failedLoginRecorder.Body.String())
 	}
 
 	loginLogsRecorder := httptest.NewRecorder()
-	loginLogsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/login-logs?actorType=teacher&status=failure&q=admin", nil)
+	loginLogsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/login-logs?actorType=teacher&status=failure&q=admin&ip=192.0.2.10", nil)
 	loginLogsRequest.AddCookie(cookie)
 	app.ServeHTTP(loginLogsRecorder, loginLogsRequest)
 	if loginLogsRecorder.Code != http.StatusOK {
@@ -648,6 +718,7 @@ func TestAuditLogsSupportFilters(t *testing.T) {
 		"name": "筛选测试班",
 	}))
 	createRequest.Header.Set("Content-Type", "application/json")
+	createRequest.Header.Set("X-Forwarded-For", "192.0.2.10")
 	createRequest.AddCookie(cookie)
 	app.ServeHTTP(createRecorder, createRequest)
 	if createRecorder.Code != http.StatusCreated {
@@ -655,7 +726,7 @@ func TestAuditLogsSupportFilters(t *testing.T) {
 	}
 
 	operationLogsRecorder := httptest.NewRecorder()
-	operationLogsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/operation-logs?actorType=teacher&method=POST&q=classes", nil)
+	operationLogsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/operation-logs?actorType=teacher&method=POST&q=classes&ip=192.0.2.10", nil)
 	operationLogsRequest.AddCookie(cookie)
 	app.ServeHTTP(operationLogsRecorder, operationLogsRequest)
 	if operationLogsRecorder.Code != http.StatusOK {
@@ -665,6 +736,216 @@ func TestAuditLogsSupportFilters(t *testing.T) {
 	decodeJSON(t, operationLogsRecorder.Body, &operationLogs)
 	if len(operationLogs.Logs) != 1 || operationLogs.Logs[0].Method != http.MethodPost || operationLogs.Logs[0].Path != "/api/classes" {
 		t.Fatalf("unexpected filtered operation logs %#v", operationLogs.Logs)
+	}
+	if operationLogs.Logs[0].IPAddress != "192.0.2.10" {
+		t.Fatalf("expected filtered operation log IP address, got %#v", operationLogs.Logs[0])
+	}
+}
+
+func TestOperationLogSummaryUsesReadableFallbacks(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"/api/auth/logout":                       "老师退出登录",
+		"/api/student/auth/logout":               "学生退出登录",
+		"/api/student/assignments/12/submission": "提交作业",
+	}
+	for path, expected := range cases {
+		if actual := operationLogSummary(http.MethodPost, path); actual != expected {
+			t.Fatalf("operationLogSummary(%q) = %q, want %q", path, actual, expected)
+		}
+	}
+	if actual := operationLogSummary(http.MethodPost, "/api/unknown/path"); strings.Contains(actual, "/api/") {
+		t.Fatalf("expected readable fallback without API path, got %q", actual)
+	}
+}
+
+func TestOperationLogsNormalizeStoredPathSummaries(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	cookie := loginAndGetCookie(t, app)
+	if _, err := app.db.Exec(`
+insert into operation_logs (occurred_at, actor_type, actor_name, method, path, status_code, ip_address, user_agent, summary)
+values ('2026-05-14T16:10:58Z', 'student', '陈嘉瑜', 'POST', '/api/student/auth/logout', 200, '10.172.45.173', '', 'POST /api/student/auth/logout')`); err != nil {
+		t.Fatalf("seed operation log: %v", err)
+	}
+
+	logsRecorder := httptest.NewRecorder()
+	logsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/operation-logs?actorType=student&q=退出", nil)
+	logsRequest.AddCookie(cookie)
+	app.ServeHTTP(logsRecorder, logsRequest)
+	if logsRecorder.Code != http.StatusOK {
+		t.Fatalf("expected operation logs 200, got %d: %s", logsRecorder.Code, logsRecorder.Body.String())
+	}
+
+	var logs operationLogsResponse
+	decodeJSON(t, logsRecorder.Body, &logs)
+	if len(logs.Logs) != 1 {
+		t.Fatalf("expected one normalized operation log, got %#v", logs.Logs)
+	}
+	if logs.Logs[0].Summary != "学生退出登录" {
+		t.Fatalf("expected readable operation summary, got %#v", logs.Logs[0])
+	}
+}
+
+func TestAuditLogsDefaultLimitCoversMoreThanOneHundredRows(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	cookie := loginAndGetCookie(t, app)
+	if _, err := app.db.Exec(`delete from operation_logs`); err != nil {
+		t.Fatalf("clear seeded operation logs: %v", err)
+	}
+	for index := 0; index < 120; index++ {
+		occurredAt := time.Date(2026, 5, 14, 16, index, 0, 0, time.UTC).Format(time.RFC3339)
+		if _, err := app.db.Exec(`
+insert into operation_logs (occurred_at, actor_type, actor_name, method, path, status_code, ip_address, user_agent, summary)
+values (?, 'teacher', '示例老师', 'POST', '/api/classes', 201, '127.0.0.1', '', ?)`,
+			occurredAt,
+			fmt.Sprintf("批量日志 %03d", index),
+		); err != nil {
+			t.Fatalf("seed operation log %d: %v", index, err)
+		}
+	}
+
+	logsRecorder := httptest.NewRecorder()
+	logsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/operation-logs", nil)
+	logsRequest.AddCookie(cookie)
+	app.ServeHTTP(logsRecorder, logsRequest)
+	if logsRecorder.Code != http.StatusOK {
+		t.Fatalf("expected operation logs 200, got %d: %s", logsRecorder.Code, logsRecorder.Body.String())
+	}
+
+	var logs operationLogsResponse
+	decodeJSON(t, logsRecorder.Body, &logs)
+	if len(logs.Logs) != 120 {
+		t.Fatalf("expected default operation log limit to include 120 rows, got %d", len(logs.Logs))
+	}
+}
+
+func TestAuditLogsUseServerPagination(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	cookie := loginAndGetCookie(t, app)
+	if _, err := app.db.Exec(`delete from login_logs`); err != nil {
+		t.Fatalf("clear seeded login logs: %v", err)
+	}
+	for index := 0; index < 9; index++ {
+		occurredAt := time.Date(2026, 5, 14, 16, index, 0, 0, time.UTC).Format(time.RFC3339)
+		if _, err := app.db.Exec(`
+insert into login_logs (occurred_at, actor_type, actor_name, username, status, ip_address, user_agent, message)
+values (?, 'teacher', '示例老师', ?, 'success', '127.0.0.1', '', ?)`,
+			occurredAt,
+			fmt.Sprintf("admin-%03d", index),
+			fmt.Sprintf("分页登录 %03d", index),
+		); err != nil {
+			t.Fatalf("seed login log %d: %v", index, err)
+		}
+	}
+
+	logsRecorder := httptest.NewRecorder()
+	logsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/login-logs?page=2&pageSize=8", nil)
+	logsRequest.AddCookie(cookie)
+	app.ServeHTTP(logsRecorder, logsRequest)
+	if logsRecorder.Code != http.StatusOK {
+		t.Fatalf("expected login logs 200, got %d: %s", logsRecorder.Code, logsRecorder.Body.String())
+	}
+
+	var logs loginLogsResponse
+	decodeJSON(t, logsRecorder.Body, &logs)
+	if len(logs.Logs) != 1 {
+		t.Fatalf("expected one login log on page 2, got %#v", logs.Logs)
+	}
+	if logs.Pagination.Page != 2 || logs.Pagination.PageSize != 8 || logs.Pagination.Total != 9 || logs.Pagination.TotalPages != 2 {
+		t.Fatalf("unexpected audit log pagination %#v", logs.Pagination)
+	}
+	if logs.Logs[0].Username != "admin-000" {
+		t.Fatalf("expected oldest row on page 2, got %#v", logs.Logs[0])
+	}
+}
+
+func TestAuditLogsMergedTimelineUsesServerPagination(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	cookie := loginAndGetCookie(t, app)
+	if _, err := app.db.Exec(`delete from login_logs`); err != nil {
+		t.Fatalf("clear seeded login logs: %v", err)
+	}
+	if _, err := app.db.Exec(`delete from operation_logs`); err != nil {
+		t.Fatalf("clear seeded operation logs: %v", err)
+	}
+	if _, err := app.db.Exec(`
+insert into login_logs (occurred_at, actor_type, actor_name, username, status, ip_address, user_agent, message)
+values ('2026-05-14T16:10:58Z', 'student', '陈嘉瑜', '20260001', 'success', '10.172.45.173', '', '学生退出登录')`); err != nil {
+		t.Fatalf("seed login log: %v", err)
+	}
+	if _, err := app.db.Exec(`
+insert into operation_logs (occurred_at, actor_type, actor_name, method, path, status_code, ip_address, user_agent, summary)
+values ('2026-05-14T16:11:58Z', 'student', '陈嘉瑜', 'POST', '/api/student/auth/logout', 200, '10.172.45.173', '', 'POST /api/student/auth/logout')`); err != nil {
+		t.Fatalf("seed operation log: %v", err)
+	}
+
+	logsRecorder := httptest.NewRecorder()
+	logsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/logs?q=退出&ip=10.172&page=1&pageSize=8", nil)
+	logsRequest.AddCookie(cookie)
+	app.ServeHTTP(logsRecorder, logsRequest)
+	if logsRecorder.Code != http.StatusOK {
+		t.Fatalf("expected merged logs 200, got %d: %s", logsRecorder.Code, logsRecorder.Body.String())
+	}
+
+	var logs auditLogsResponse
+	decodeJSON(t, logsRecorder.Body, &logs)
+	if len(logs.Logs) != 2 {
+		t.Fatalf("expected two merged logs, got %#v", logs.Logs)
+	}
+	if logs.Logs[0].LogType != "operation" || logs.Logs[0].Action != "学生退出登录" || logs.Logs[0].Result != "成功" {
+		t.Fatalf("expected latest operation logout row first, got %#v", logs.Logs[0])
+	}
+	if logs.Logs[1].LogType != "login" || logs.Logs[1].Account != "20260001" || logs.Logs[1].Action != "学生退出登录" {
+		t.Fatalf("expected login logout row second, got %#v", logs.Logs[1])
+	}
+	if logs.Pagination.Page != 1 || logs.Pagination.PageSize != 8 || logs.Pagination.Total != 2 || logs.Pagination.TotalPages != 1 {
+		t.Fatalf("unexpected merged pagination %#v", logs.Pagination)
+	}
+}
+
+func TestAuditLogsMergedTimelineFiltersByLogType(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	cookie := loginAndGetCookie(t, app)
+	if _, err := app.db.Exec(`delete from login_logs`); err != nil {
+		t.Fatalf("clear seeded login logs: %v", err)
+	}
+	if _, err := app.db.Exec(`delete from operation_logs`); err != nil {
+		t.Fatalf("clear seeded operation logs: %v", err)
+	}
+	if _, err := app.db.Exec(`
+insert into login_logs (occurred_at, actor_type, actor_name, username, status, ip_address, user_agent, message)
+values ('2026-05-14T16:10:58Z', 'teacher', '示例老师', 'admin', 'success', '127.0.0.1', '', '登录成功')`); err != nil {
+		t.Fatalf("seed login log: %v", err)
+	}
+	if _, err := app.db.Exec(`
+insert into operation_logs (occurred_at, actor_type, actor_name, method, path, status_code, ip_address, user_agent, summary)
+values ('2026-05-14T16:11:58Z', 'teacher', '示例老师', 'POST', '/api/classes', 201, '127.0.0.1', '', '创建班级')`); err != nil {
+		t.Fatalf("seed operation log: %v", err)
+	}
+
+	logsRecorder := httptest.NewRecorder()
+	logsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/logs?logType=login&page=1&pageSize=8", nil)
+	logsRequest.AddCookie(cookie)
+	app.ServeHTTP(logsRecorder, logsRequest)
+	if logsRecorder.Code != http.StatusOK {
+		t.Fatalf("expected merged logs 200, got %d: %s", logsRecorder.Code, logsRecorder.Body.String())
+	}
+
+	var logs auditLogsResponse
+	decodeJSON(t, logsRecorder.Body, &logs)
+	if len(logs.Logs) != 1 || logs.Logs[0].LogType != "login" || logs.Logs[0].Action != "登录成功" {
+		t.Fatalf("expected only login logs, got %#v", logs.Logs)
 	}
 }
 
@@ -1131,6 +1412,46 @@ func TestStudentAssignmentsListShowsPublishedOnly(t *testing.T) {
 	}
 	if payload.SubmissionConstraints.AllowedTypesLabel != "PDF、Word、Excel、PPT、TXT、JPG、PNG、ZIP" || payload.SubmissionConstraints.MaxFileSizeLabel != "100 MB" {
 		t.Fatalf("expected submission constraints in list payload, got %#v", payload.SubmissionConstraints)
+	}
+}
+
+func TestStudentAssignmentsUseServerPagination(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	prepareStudentAuthFixture(t, app, "ABCD1234", "20260001", "张小明")
+	for index := 0; index < 9; index++ {
+		if _, err := app.createAssignment(createAssignmentRequest{
+			ClassID:     1,
+			Title:       fmt.Sprintf("分页作业 %03d", index),
+			Description: "学生端分页测试",
+			DueAt:       time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339),
+			Status:      "published",
+		}); err != nil {
+			t.Fatalf("create published assignment %d: %v", index, err)
+		}
+	}
+
+	studentCookie := activateAndLoginStudent(t, app, "ABCD1234", "20260001", "student123")
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/student/assignments?page=2&pageSize=8", nil)
+	request.AddCookie(studentCookie)
+	app.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected list 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload studentAssignmentsResponse
+	decodeJSON(t, recorder.Body, &payload)
+	if len(payload.Assignments) != 1 {
+		t.Fatalf("expected 1 assignment on page 2, got %#v", payload.Assignments)
+	}
+	if payload.Pagination.Page != 2 || payload.Pagination.PageSize != 8 || payload.Pagination.Total != 9 || payload.Pagination.TotalPages != 2 {
+		t.Fatalf("unexpected student assignment pagination %#v", payload.Pagination)
+	}
+	if payload.Assignments[0].Title != "分页作业 000" {
+		t.Fatalf("expected oldest assignment on page 2, got %#v", payload.Assignments[0])
 	}
 }
 

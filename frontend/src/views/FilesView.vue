@@ -426,7 +426,7 @@
 
     </section>
 
-    <div v-if="copyDialogEntry" class="copy-dialog-backdrop">
+    <div v-if="copyDialogEntry" class="copy-dialog-backdrop" @click.self="closeCopyDialog">
       <section class="copy-dialog" data-testid="copy-dialog">
         <div class="copy-dialog__header">
           <div>
@@ -593,7 +593,7 @@
       </section>
     </div>
 
-    <div v-if="uploadDialogOpen" class="copy-dialog-backdrop" data-testid="upload-dialog-backdrop">
+    <div v-if="uploadDialogOpen" class="copy-dialog-backdrop" data-testid="upload-dialog-backdrop" @click.self="closeUploadDialog">
       <section class="copy-dialog files-upload-dialog" data-testid="upload-dialog">
         <div class="copy-dialog__header">
           <div>
@@ -2351,7 +2351,7 @@ watch(viewMode, () => {
 }
 
 .files-toolbar {
-  --files-search-slot-width: min(420px, 44vw);
+  --files-search-slot-width: min(240px, 24vw);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 10px;
@@ -2506,8 +2506,8 @@ watch(viewMode, () => {
 }
 
 .files-controls__search input {
-  min-width: 200px;
-  width: 220px;
+  min-width: 140px;
+  width: 160px;
 }
 
 .files-controls__option {
@@ -2625,6 +2625,7 @@ watch(viewMode, () => {
 }
 
 .files-grid__card {
+  min-width: 0;
   border: 1px solid var(--border-soft);
   border-radius: 12px;
   padding: 10px;
@@ -2682,9 +2683,18 @@ watch(viewMode, () => {
 
 .files-grid__title {
   display: block;
+  min-width: 0;
+  max-width: 100%;
   margin-bottom: 6px;
   font-weight: 600;
   text-align: left;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.files-grid__title span {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .files-table__actions,
@@ -2826,7 +2836,7 @@ watch(viewMode, () => {
 
 @media (max-width: 1100px) {
   .files-toolbar {
-    --files-search-slot-width: 100%;
+    --files-search-slot-width: min(240px, 100%);
   }
 
   .files-toolbar__top {
@@ -2848,7 +2858,7 @@ watch(viewMode, () => {
 
   .files-controls__search {
     justify-content: flex-start;
-    width: 100%;
+    width: auto;
   }
 
   .files-toolbar__search-slot .files-controls__search {

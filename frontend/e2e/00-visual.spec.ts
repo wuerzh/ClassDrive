@@ -116,9 +116,7 @@ test.describe("visual baseline", () => {
     await expect(page).toHaveURL(/\/assignments$/);
     await expectStableScreenshot(page.locator(".shell"), "teacher-assignments-shell.png");
 
-    await page.getByTestId("sidebar-nav").getByRole("link", { name: "学生管理", exact: true }).click();
-    await expect(page).toHaveURL(/\/students/);
-    await expectStableScreenshot(page.locator(".shell"), "teacher-students-shell.png");
+    await expect(page.getByTestId("sidebar-nav").getByRole("link", { name: "学生管理", exact: true })).toHaveCount(0);
 
     await page.getByTestId("sidebar-nav").getByRole("link", { name: "设置", exact: true }).click();
     await expect(page).toHaveURL(/\/settings$/);

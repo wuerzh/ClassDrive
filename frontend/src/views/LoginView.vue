@@ -1,7 +1,10 @@
 <template>
   <div class="login-page">
     <section class="login-card">
-      <div class="login-card__eyebrow">ClassDrive</div>
+      <div class="login-card__brand">
+        <img class="login-card__brand-logo" src="/logo.svg" alt="ClassDrive" data-testid="app-brand-logo" />
+        <div class="login-card__eyebrow">ClassDrive</div>
+      </div>
       <h1>{{ activeRole === "teacher" ? "老师登录" : "学生登录" }}</h1>
 
       <div class="login-tabs" role="tablist" aria-label="登录角色">
@@ -108,7 +111,7 @@
             target="_blank"
             rel="noopener noreferrer"
             data-testid="app-author-link"
-          >wuerzh</a> | Ver: 1.2 | WX/QQ: 709868663</span>
+          >wuerzh</a> | Ver: 1.3 | WX/QQ: 709868663</span>
       </footer>
     </section>
   </div>
@@ -212,7 +215,14 @@ async function submitStudent() {
 }
 
 .login-card__footer a {
-  color: inherit;
+  color: var(--accent-strong);
+  font-weight: 700;
+  text-decoration-line: underline;
   text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.login-card__footer a:hover {
+  color: var(--accent);
 }
 </style>

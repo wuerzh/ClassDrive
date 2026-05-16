@@ -20,6 +20,12 @@ describe("StudentAssignmentsView", () => {
           maxFileSizeBytes: 100 * 1024 * 1024,
           maxFileSizeLabel: "100 MB",
         },
+        pagination: {
+          page: 1,
+          pageSize: 30,
+          total: 4,
+          totalPages: 1,
+        },
         assignments: [
           {
             id: 9,
@@ -131,6 +137,72 @@ describe("StudentAssignmentsView", () => {
     await wrapper.get('[data-testid="student-assignment-row-9"]').trigger("click");
     await flushPromises();
     expect(router.currentRoute.value.fullPath).toBe("/student/assignments/9");
-    expect(fetchMock).toHaveBeenCalledWith("/api/student/assignments", expect.any(Object));
+    expect(fetchMock).toHaveBeenCalledWith("/api/student/assignments?page=1&pageSize=30", expect.any(Object));
+  });
+
+  it("requests the next student assignment page from the backend", async () => {
+    const fetchMock = vi.fn(async (input: string) => {
+      const url = new URL(input, "http://localhost");
+      const page = Number(url.searchParams.get("page") ?? "1");
+      const rowId = page === 2 ? 8 : 9;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          submissionConstraints: {
+            allowedTypesLabel: "PDF、Word、Excel、PPT、TXT、JPG、PNG、ZIP",
+            maxFileSizeBytes: 100 * 1024 * 1024,
+            maxFileSizeLabel: "100 MB",
+          },
+          pagination: {
+            page,
+            pageSize: 1,
+            total: 2,
+            totalPages: 2,
+          },
+          assignments: [
+            {
+              id: rowId,
+              classId: 1,
+              title: page === 2 ? "第二页作业" : "第一页作业",
+              description: "",
+              dueAt: "2026-05-01T12:00:00Z",
+              status: "published",
+              createdAt: "2026-04-23T10:00:00Z",
+              updatedAt: "2026-04-23T10:30:00Z",
+              overdue: false,
+              submission: null,
+            },
+          ],
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/student/assignments", component: StudentAssignmentsView },
+        { path: "/student/assignments/:assignmentId", component: { template: "<div>详情页</div>" } },
+      ],
+    });
+    await router.push("/student/assignments?pageSize=1");
+    await router.isReady();
+
+    const wrapper = mount(StudentAssignmentsView, {
+      global: {
+        plugins: [createPinia(), router],
+      },
+    });
+
+    await flushPromises();
+    expect(wrapper.text()).toContain("第一页作业");
+    expect(wrapper.get('[data-testid="student-assignment-pagination-summary"]').text()).toContain("第 1 / 2 页 · 共 2 条");
+    expect(fetchMock).toHaveBeenCalledWith("/api/student/assignments?page=1&pageSize=1", expect.any(Object));
+
+    await wrapper.get('[data-testid="student-assignment-page-next"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("第二页作业");
+    expect(fetchMock).toHaveBeenCalledWith("/api/student/assignments?page=2&pageSize=1", expect.any(Object));
   });
 });

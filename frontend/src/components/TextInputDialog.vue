@@ -1,5 +1,5 @@
 <template>
-  <div v-if="open" class="copy-dialog-backdrop">
+  <div v-if="open" class="copy-dialog-backdrop" @click.self="emit('cancel')">
     <section class="copy-dialog" :data-testid="`${testIdPrefix}-dialog`">
       <div class="copy-dialog__header">
         <div>

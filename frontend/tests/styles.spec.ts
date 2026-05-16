@@ -17,6 +17,16 @@ function listSourceFiles(dir: string): string[] {
 }
 
 describe("shared styles", () => {
+  it("publishes ClassDrive favicon and brand logo assets", () => {
+    const indexHtml = readFileSync(resolve("index.html"), "utf8");
+    const css = readFileSync(stylesPath, "utf8");
+
+    expect(indexHtml).toMatch(/<link rel="icon" type="image\/svg\+xml" href="\/favicon\.svg" \/>/);
+    expect(indexHtml).toMatch(/<link rel="alternate icon" href="\/favicon\.ico" \/>/);
+    expect(css).toMatch(/\.brand-logo\s*\{[\s\S]*?width:\s*40px;[\s\S]*?height:\s*40px;/);
+    expect(css).toMatch(/\.login-card__brand-logo\s*\{[\s\S]*?width:\s*64px;[\s\S]*?height:\s*64px;/);
+  });
+
   it("keeps toasts above the sticky topbar but below modal dialogs", () => {
     const css = readFileSync(stylesPath, "utf8");
 
@@ -34,6 +44,7 @@ describe("shared styles", () => {
   it("uses compact shared controls and data tables for high-density pages", () => {
     const css = readFileSync(stylesPath, "utf8");
     const studentsView = readFileSync(resolve(sourceRoot, "views", "StudentsView.vue"), "utf8");
+    const studentRosterPanel = readFileSync(resolve(sourceRoot, "components", "StudentRosterPanel.vue"), "utf8");
     const assignmentDetail = readFileSync(resolve(sourceRoot, "views", "AssignmentDetailView.vue"), "utf8");
 
     expect(css).toMatch(/\.button\s*\{[\s\S]*?min-height:\s*34px;/);
@@ -44,16 +55,46 @@ describe("shared styles", () => {
     expect(studentsView).toMatch(/\.students-page__registration-filter\s*\{[\s\S]*?flex:\s*0 0 calc\(\(3em \+ 38px\) \* 1\.2\);[\s\S]*?inline-size:\s*calc\(\(3em \+ 38px\) \* 1\.2\);[\s\S]*?min-width:\s*calc\(\(3em \+ 38px\) \* 1\.2\);/);
     expect(studentsView).toMatch(/\.students-page__registration\s*\{[\s\S]*?min-height:\s*20px;/);
     expect(studentsView).toMatch(/\.students-page__row-actions\s+\.text-button\s*\{[\s\S]*?min-height:\s*24px;/);
+    expect(studentsView).toContain("studentRosterFrameStyle");
+    expect(studentsView).toContain("students-page__table-frame");
+    expect(studentsView).toMatch(/\.students-page__roster-panel\s*\{[\s\S]*?grid-template-rows:\s*max-content max-content max-content;/);
+    expect(studentsView).toMatch(/\.students-page__table-frame\s*\{[\s\S]*?min-height:\s*calc\(44px \* \(var\(--student-roster-page-size\) \+ 1\)\);/);
+    expect(studentsView).toMatch(/\.students-page__table\s*\{[\s\S]*?height:\s*auto;/);
+    expect(studentsView).toMatch(/\.students-page__table\s*\{[\s\S]*?border:\s*0;/);
+    expect(studentsView).toMatch(/\.students-page__table thead tr,\s*\.students-page__table tbody tr\s*\{[\s\S]*?height:\s*44px;/);
+    expect(studentsView).toMatch(/\.students-page__table th,\s*\.students-page__table td\s*\{[\s\S]*?height:\s*44px;/);
+    expect(studentRosterPanel).toMatch(/\.student-roster-panel\s*\{[\s\S]*?align-self:\s*start;/);
+    expect(studentRosterPanel).toMatch(/\.student-roster-panel\s*\{[\s\S]*?align-content:\s*start;/);
+    expect(studentRosterPanel).toMatch(/\.student-roster-panel\s*\{[\s\S]*?grid-template-rows:\s*max-content max-content max-content;/);
+    expect(studentRosterPanel).toMatch(/\.student-roster-panel\s*\{[\s\S]*?justify-items:\s*stretch;/);
+    expect(studentRosterPanel).toMatch(/\.students-page__toolbar\s*\{[\s\S]*?align-self:\s*start;/);
+    expect(studentRosterPanel).toMatch(/\.students-page__toolbar\s*\{[\s\S]*?min-height:\s*58px;/);
+    expect(studentRosterPanel).toMatch(/\.students-page__toolbar-actions\s*\{[\s\S]*?min-height:\s*38px;/);
+    expect(studentRosterPanel).toMatch(/\.students-page__search-group\s*\{[\s\S]*?min-height:\s*38px;/);
+    expect(studentRosterPanel).toMatch(/\.student-roster-panel\s+\.pagination-controls\s*\{[\s\S]*?align-self:\s*start;/);
+    expect(studentRosterPanel).toMatch(/\.student-roster-panel\s+\.pagination-controls\s*\{[\s\S]*?min-height:\s*44px;/);
+    expect(studentRosterPanel).toContain("studentRosterFrameStyle");
+    expect(studentRosterPanel).toContain("--student-roster-page-size");
+    expect(studentRosterPanel).toContain("students-page__table-frame");
+    expect(studentRosterPanel).toMatch(/\.students-page__table-frame\s*\{[\s\S]*?align-self:\s*start;/);
+    expect(studentRosterPanel).toMatch(/\.students-page__table-frame\s*\{[\s\S]*?min-height:\s*calc\(44px \* \(var\(--student-roster-page-size\) \+ 1\)\);/);
+    expect(studentRosterPanel).toMatch(/\.students-page__table\s*\{[\s\S]*?width:\s*100%;/);
+    expect(studentRosterPanel).toMatch(/\.students-page__table\s*\{[\s\S]*?height:\s*auto;/);
+    expect(studentRosterPanel).toMatch(/\.students-page__table\s*\{[\s\S]*?border:\s*0;/);
+    expect(studentRosterPanel).toMatch(/\.students-page__table thead tr,\s*\.students-page__table tbody tr\s*\{[\s\S]*?height:\s*44px;/);
+    expect(studentRosterPanel).toMatch(/\.students-page__table th,\s*\.students-page__table td\s*\{[\s\S]*?height:\s*44px;/);
+    expect(studentRosterPanel).toMatch(/\.students-page__table th,\s*\.students-page__table td\s*\{[\s\S]*?max-height:\s*44px;/);
     expect(readFileSync(resolve(sourceRoot, "views", "StudentFilesView.vue"), "utf8")).toMatch(/\.student-files-page__card\s*\{[\s\S]*?padding:\s*8px;/);
     const studentAssignmentDetail = readFileSync(resolve(sourceRoot, "views", "StudentAssignmentDetailView.vue"), "utf8");
-    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__split\s*\{[\s\S]*?grid-template-columns:\s*minmax\(400px,\s*520px\)\s+minmax\(420px,\s*1fr\);/);
-    expect(studentAssignmentDetail).toMatch(/@media\s*\(max-width:\s*1080px\)\s*\{[\s\S]*?\.student-assignment-detail__split\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/);
-    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__requirement--responsive\s*\{[\s\S]*?grid-template-columns:\s*minmax\(150px,\s*1fr\)\s+minmax\(260px,\s*2fr\)\s+minmax\(190px,\s*1\.1fr\)\s+minmax\(150px,\s*0\.8fr\);/);
-    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__requirement\s*\{[\s\S]*?gap:\s*12px 14px;/);
-    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__card--info\s+\.student-assignment-detail__requirement-item--due\s*\{[\s\S]*?grid-column:\s*1 \/ -1;/);
-    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__card--info\s+\.student-assignment-detail__requirement-item--size\s+\.student-assignment-detail__requirement-value\s*\{[\s\S]*?white-space:\s*nowrap;[\s\S]*?overflow-wrap:\s*normal;/);
-    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__requirement-item--format\s*\{[\s\S]*?min-width:\s*0;/);
+    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__card\s*\{[\s\S]*?display:\s*grid;[\s\S]*?gap:\s*18px;/);
+    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__hero\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;/);
+    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__requirement-bar\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-wrap:\s*wrap;/);
+    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__requirement-item\s*\{[\s\S]*?display:\s*flex;[\s\S]*?gap:\s*8px;[\s\S]*?align-items:\s*baseline;/);
+    expect(studentAssignmentDetail).not.toContain("student-assignment-detail__card--info");
+    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__submit-panel\s*\{[\s\S]*?padding-bottom:\s*18px;[\s\S]*?border-bottom:\s*1px solid var\(--border-soft\);/);
+    expect(studentAssignmentDetail).toMatch(/\.student-assignment-detail__section-kicker\s*\{[\s\S]*?text-transform:\s*uppercase;[\s\S]*?letter-spacing:\s*0\.05em;/);
     expect(studentAssignmentDetail).not.toContain("student-assignment-detail__requirement--nowrap");
+    expect(studentAssignmentDetail).not.toContain("student-assignment-detail__requirement--responsive");
     expect(studentAssignmentDetail).not.toMatch(/(?:^|\n)\.student-assignment-detail__requirement\s*\{[^}]*white-space:\s*nowrap;/);
     expect(studentAssignmentDetail).not.toMatch(/(?:^|\n)\.student-assignment-detail__requirement-value\s*\{[^}]*white-space:\s*nowrap;/);
     const studentFilesView = readFileSync(resolve(sourceRoot, "views", "StudentFilesView.vue"), "utf8");
@@ -63,11 +104,14 @@ describe("shared styles", () => {
     expect(studentFilesView).not.toContain("width: calc(100% + 0.75rem);");
     expect(studentFilesView).toMatch(/\.student-files-page__workspace\s*>\s*\.files-toolbar\s*\{[\s\S]*?--files-search-slot-width:\s*min\(320px,\s*34vw\);/);
     expect(studentFilesView).toMatch(/\.files-toolbar\s*\{[\s\S]*?--files-search-slot-width:\s*min\(420px,\s*44vw\);[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);[\s\S]*?align-items:\s*stretch;[\s\S]*?justify-content:\s*stretch;/);
-    expect(teacherFilesView).toMatch(/\.files-toolbar\s*\{[\s\S]*?--files-search-slot-width:\s*min\(420px,\s*44vw\);/);
+    expect(teacherFilesView).toMatch(/\.files-toolbar\s*\{[\s\S]*?--files-search-slot-width:\s*min\(240px,\s*24vw\);/);
     expect(studentFilesView).toMatch(/\.files-toolbar__bottom\s*\{[\s\S]*?position:\s*relative;[\s\S]*?padding-right:\s*calc\(var\(--files-search-slot-width\) \+ 10px\);/);
     expect(teacherFilesView).toMatch(/\.files-toolbar__bottom\s*\{[\s\S]*?position:\s*relative;[\s\S]*?padding-right:\s*calc\(var\(--files-search-slot-width\) \+ 10px\);/);
     expect(studentFilesView).toMatch(/\.files-toolbar__search-slot\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?right:\s*0;[\s\S]*?width:\s*var\(--files-search-slot-width\);/);
     expect(teacherFilesView).toMatch(/\.files-toolbar__search-slot\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?right:\s*0;[\s\S]*?width:\s*var\(--files-search-slot-width\);/);
+    expect(teacherFilesView).toMatch(/@media\s*\(max-width:\s*1100px\)\s*\{[\s\S]*?\.files-toolbar\s*\{[\s\S]*?--files-search-slot-width:\s*min\(240px,\s*100%\);/);
+    expect(teacherFilesView).toMatch(/\.files-grid__card\s*\{[\s\S]*?min-width:\s*0;/);
+    expect(teacherFilesView).toMatch(/\.files-grid__title\s*\{[\s\S]*?overflow-wrap:\s*anywhere;[\s\S]*?word-break:\s*break-word;/);
     expect(studentFilesView).toMatch(/\.student-files-page__actions\s*\{[\s\S]*?flex-wrap:\s*wrap;/);
     expect(assignmentDetail).toMatch(/\.assignment-detail-heading \.classes-page__title\s*\{[\s\S]*?font-size:\s*1\.16rem;/);
     expect(assignmentDetail).toMatch(/\.assignment-submissions-table th,\s*\.assignment-submissions-table td\s*\{[\s\S]*?padding:\s*6px 8px;/);
@@ -108,8 +152,8 @@ describe("shared styles", () => {
     expect(studentLayout).toMatch(/@media\s*\(max-width:\s*520px\)\s*\{[\s\S]*?\.student-shell__actions\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+auto;/);
     expect(studentLayout).toMatch(/@media\s*\(max-width:\s*520px\)\s*\{[\s\S]*?\.student-shell__user\s*\{[\s\S]*?grid-column:\s*1 \/ -1;/);
     expect(studentAssignmentDetail).not.toContain("student-assignment-detail__header");
-    expect(studentAssignmentDetail).toMatch(/@media\s*\(max-width:\s*760px\)\s*\{[\s\S]*?\.student-assignment-detail__overview-main\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/);
-    expect(studentAssignmentDetail).toMatch(/@media\s*\(max-width:\s*560px\)\s*\{[\s\S]*?\.student-assignment-detail__requirement--responsive\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/);
+    expect(studentAssignmentDetail).toMatch(/@media\s*\(max-width:\s*760px\)\s*\{[\s\S]*?\.student-assignment-detail__hero\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/);
+    expect(studentAssignmentDetail).toMatch(/@media\s*\(max-width:\s*560px\)\s*\{[\s\S]*?\.student-assignment-detail__steps\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/);
   });
 
   it("keeps native select menus legible in dark dialogs", () => {
@@ -157,6 +201,22 @@ describe("shared styles", () => {
     expect(footerRule).toMatch(/font-size:\s*13px;/);
   });
 
+  it("makes footer author links visibly clickable", () => {
+    const css = readFileSync(stylesPath, "utf8");
+    const loginView = readFileSync(resolve(sourceRoot, "views", "LoginView.vue"), "utf8");
+    const sidebarLinkRule = css.match(/\.sidebar__footer a\s*\{[^}]*\}/)?.[0] ?? "";
+    const loginLinkRule = loginView.match(/\.login-card__footer a\s*\{[^}]*\}/)?.[0] ?? "";
+
+    expect(sidebarLinkRule).toMatch(/color:\s*var\(--accent-strong\);/);
+    expect(sidebarLinkRule).toMatch(/font-weight:\s*700;/);
+    expect(sidebarLinkRule).toMatch(/text-decoration-line:\s*underline;/);
+    expect(sidebarLinkRule).toMatch(/cursor:\s*pointer;/);
+    expect(loginLinkRule).toMatch(/color:\s*var\(--accent-strong\);/);
+    expect(loginLinkRule).toMatch(/font-weight:\s*700;/);
+    expect(loginLinkRule).toMatch(/text-decoration-line:\s*underline;/);
+    expect(loginLinkRule).toMatch(/cursor:\s*pointer;/);
+  });
+
   it("keeps modal backdrops above the full app shell and routes backdrop clicks through guarded close handlers", () => {
     const css = readFileSync(stylesPath, "utf8");
     const vueSource = listSourceFiles(sourceRoot).map((path) => readFileSync(path, "utf8")).join("\n");
@@ -180,6 +240,7 @@ describe("shared styles", () => {
   it("keeps confirmation dialogs above ordinary edit dialogs", () => {
     const confirmDialog = readFileSync(resolve(sourceRoot, "components", "ConfirmDialog.vue"), "utf8");
 
+    expect(confirmDialog).toContain('@click.self="$emit(\'cancel\')"');
     expect(confirmDialog).toMatch(/\.copy-dialog-backdrop\s*\{[\s\S]*?z-index:\s*5200;/);
   });
 
@@ -253,6 +314,60 @@ describe("shared styles", () => {
     expect(css).toMatch(/\.shell__content\s*\{[\s\S]*?padding:\s*0 1\.2rem 1\.1rem 0;/);
     expect(css).toMatch(/\.topbar\s*\{[\s\S]*?top:\s*0;[\s\S]*?border-radius:\s*0 0 22px 22px;/);
     expect(css).not.toContain(".topbar::before");
+  });
+
+  it("keeps teacher pages and dialogs contained on narrow viewports", () => {
+    const css = readFileSync(stylesPath, "utf8");
+    const classesView = readFileSync(resolve(sourceRoot, "views", "ClassesView.vue"), "utf8");
+    const assignmentsView = readFileSync(resolve(sourceRoot, "views", "AssignmentsView.vue"), "utf8");
+
+    const narrowTopbarRule = css.match(/@media\s*\(max-width:\s*960px\)\s*\{[\s\S]*?@media\s*\(max-width:\s*640px\)/)?.[0] ?? "";
+    expect(narrowTopbarRule).toMatch(/\.topbar\s*\{[\s\S]*?display:\s*flex;/);
+    expect(narrowTopbarRule).toMatch(/\.topbar__actions\s*\{[\s\S]*?display:\s*flex;/);
+    expect(narrowTopbarRule).not.toMatch(/\.topbar\s*\{[\s\S]*?grid-template-columns:/);
+    expect(narrowTopbarRule).not.toMatch(/\.topbar__actions\s*\{[\s\S]*?grid-template-columns:/);
+    expect(css).toMatch(/@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.copy-dialog-backdrop\s*\{[\s\S]*?place-items:\s*stretch;/);
+    expect(css).toMatch(/@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.copy-dialog\s*\{[\s\S]*?width:\s*100%;[\s\S]*?max-height:\s*calc\(100dvh - 16px\);/);
+    expect(css).toMatch(/@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.classes-page__board,\s*\.settings-page__panel\s*\{[\s\S]*?min-width:\s*0;/);
+    expect(classesView).toMatch(/\.classes-management__table-wrap\s*\{[\s\S]*?overflow-x:\s*auto;/);
+    const classesNarrowRule = classesView.match(/@media\s*\(max-width:\s*960px\)\s*\{[\s\S]*?@media\s*\(max-width:\s*720px\)/)?.[0] ?? "";
+    expect(classesNarrowRule).toMatch(/\.classes-management__filters\s*\{[\s\S]*?flex-wrap:\s*nowrap;/);
+    expect(classesNarrowRule).toMatch(/\.classes-management__filters\s*\{[\s\S]*?overflow-x:\s*auto;/);
+    expect(classesNarrowRule).toMatch(/\.classes-management__search-group\s*\{[\s\S]*?flex:\s*0 0 310px;/);
+    expect(classesNarrowRule).not.toContain("flex-basis: 100%;");
+    expect(classesNarrowRule).toMatch(/\.classes-management__table\s*\{[\s\S]*?min-width:\s*840px;/);
+    expect(classesNarrowRule).toMatch(/\.classes-management__actions\s*\{[\s\S]*?flex-wrap:\s*nowrap;/);
+    const assignmentsNarrowRule = assignmentsView.match(/@media\s*\(max-width:\s*960px\)\s*\{[\s\S]*?@media\s*\(max-width:\s*640px\)/)?.[0] ?? "";
+    expect(assignmentsView).toMatch(/\.assignments-page__toolbar\s*\{[\s\S]*?flex-wrap:\s*wrap;/);
+    expect(assignmentsNarrowRule).toMatch(/\.assignments-page__toolbar\s*\{[\s\S]*?align-items:\s*center;/);
+    expect(assignmentsNarrowRule).toMatch(/\.assignments-page__toolbar\s*:deep\(\.filter-select\)\s*\{[\s\S]*?flex:\s*0 0 180px;/);
+    expect(assignmentsNarrowRule).not.toContain("flex-basis: 100%;");
+    expect(assignmentsNarrowRule).toMatch(/\.assignments-page__search-group\s*\{[\s\S]*?flex:\s*1 1 220px;/);
+    expect(assignmentsView).toMatch(/\.assignments-page__table th:nth-child\(3\),\s*\.assignments-page__table td:nth-child\(3\),\s*\.assignments-page__table th:nth-child\(4\),\s*\.assignments-page__table td:nth-child\(4\)\s*\{[\s\S]*?white-space:\s*nowrap;/);
+    expect(assignmentsView).toMatch(/\.assignments-page__table \.table-sort-button\s*\{[\s\S]*?white-space:\s*nowrap;/);
+    expect(assignmentsView).toMatch(/@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.assignments-page__dialog\s*\{[\s\S]*?width:\s*100%;/);
+    expect(assignmentsView).toMatch(/@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.assignments-page__inline-field,\s*\.assignments-page__inline-field--datetime\s*\{[\s\S]*?min-width:\s*0;/);
+  });
+
+  it("keeps paginated audit and stats tables stable when a page has only a few rows", () => {
+    const auditLogsView = readFileSync(resolve(sourceRoot, "views", "AuditLogsView.vue"), "utf8");
+    const assignmentsView = readFileSync(resolve(sourceRoot, "views", "AssignmentsView.vue"), "utf8");
+    const assignmentDetail = readFileSync(resolve(sourceRoot, "views", "AssignmentDetailView.vue"), "utf8");
+
+    expect(auditLogsView).toContain("auditLogTableFrameStyle");
+    expect(auditLogsView).toContain("audit-logs-page__table-frame");
+    expect(auditLogsView).toMatch(/\.audit-logs-page__table-frame\s*\{[\s\S]*?min-height:\s*calc\(44px \* \(var\(--audit-log-page-size\) \+ 1\)\);/);
+    expect(auditLogsView).toMatch(/\.audit-logs-page__table thead tr,\s*\.audit-logs-page__table tbody tr\s*\{[\s\S]*?height:\s*44px;/);
+
+    expect(assignmentsView).toContain("missingStatsTableFrameStyle");
+    expect(assignmentsView).toContain("assignments-page__stats-table-frame");
+    expect(assignmentsView).toMatch(/\.assignments-page__stats-table-frame\s*\{[\s\S]*?min-height:\s*calc\(44px \* \(var\(--missing-stats-page-size\) \+ 1\)\);/);
+    expect(assignmentsView).toMatch(/\.assignments-page__stats-table thead tr,\s*\.assignments-page__stats-table tbody tr\s*\{[\s\S]*?height:\s*44px;/);
+
+    expect(assignmentDetail).toContain("assignmentMissingStatsTableFrameStyle");
+    expect(assignmentDetail).toContain("assignment-missing-dialog__table-frame");
+    expect(assignmentDetail).toMatch(/\.assignment-missing-dialog__table-frame\s*\{[\s\S]*?min-height:\s*calc\(44px \* \(var\(--assignment-missing-page-size\) \+ 1\)\);/);
+    expect(assignmentDetail).toMatch(/\.assignment-missing-dialog__table thead tr,\s*\.assignment-missing-dialog__table tbody tr\s*\{[\s\S]*?height:\s*44px;/);
   });
 
   it("keeps preview and drawer surfaces opaque and themed in dark mode", () => {

@@ -4,6 +4,7 @@
     class="preview-dialog-backdrop"
     :class="{ 'preview-dialog-backdrop--maximized': isMaximized }"
     data-testid="file-preview-dialog"
+    @click.self="$emit('close')"
   >
     <section
       class="preview-dialog"

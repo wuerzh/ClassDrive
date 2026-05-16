@@ -169,7 +169,7 @@
     </section>
   </section>
 
-  <div v-if="createDialogOpen" class="copy-dialog-backdrop">
+  <div v-if="createDialogOpen" class="copy-dialog-backdrop" @click.self="closeCreateDialog">
     <section class="copy-dialog assignments-page__dialog" data-testid="assignment-create-dialog">
       <div class="copy-dialog__header">
         <div>
@@ -289,7 +289,7 @@
     </section>
   </div>
 
-  <div v-if="copyDialogAssignment" class="copy-dialog-backdrop">
+  <div v-if="copyDialogAssignment" class="copy-dialog-backdrop" @click.self="closeAssignmentCopyDialog">
     <section class="copy-dialog assignments-page__copy-dialog" data-testid="assignment-copy-dialog">
       <div class="copy-dialog__header">
         <div>
@@ -340,14 +340,14 @@
     </section>
   </div>
 
-  <div v-if="missingStatsOpen" class="copy-dialog-backdrop">
+  <div v-if="missingStatsOpen" class="copy-dialog-backdrop" @click.self="closeMissingStatsDialog">
     <section class="copy-dialog assignments-page__dialog" data-testid="assignment-missing-dialog">
       <div class="copy-dialog__header">
         <div>
           <div class="copy-dialog__eyebrow">作业统计</div>
           <h3 class="copy-dialog__title">{{ currentClass ? `${currentClass.name} · 作业统计` : "作业统计" }}</h3>
         </div>
-        <button class="button button--ghost" type="button" data-testid="assignment-missing-close" @click="missingStatsOpen = false">
+        <button class="button button--ghost" type="button" data-testid="assignment-missing-close" @click="closeMissingStatsDialog">
           关闭
         </button>
       </div>
@@ -413,69 +413,75 @@
           @prev="goPrevMissingStatsPage"
           @next="goNextMissingStatsPage"
         />
-        <table v-if="!missingStatsLoading && activeAssignmentStatsRows.length" class="files-table" data-testid="assignment-missing-table">
-          <thead>
-            <tr>
-              <th>学生</th>
-              <th>
-                <button
-                  class="table-sort-button"
-                  :class="{ 'is-active': assignmentStatsSortColumn === 'studentNo' }"
-                  type="button"
-                  data-testid="assignment-stats-sort-student-no"
-                  @click="toggleAssignmentStatsSort('studentNo')"
-                >
-                  学号
-                  <span class="table-sort-button__mark">{{ assignmentStatsSortMark("studentNo") }}</span>
-                </button>
-              </th>
-              <th>
-                <button
-                  class="table-sort-button"
-                  :class="{ 'is-active': assignmentStatsSortColumn === 'submittedCount' }"
-                  type="button"
-                  data-testid="assignment-stats-sort-submitted"
-                  @click="toggleAssignmentStatsSort('submittedCount')"
-                >
-                  已交次数
-                  <span class="table-sort-button__mark">{{ assignmentStatsSortMark("submittedCount") }}</span>
-                </button>
-              </th>
-              <th>
-                <button
-                  class="table-sort-button"
-                  :class="{ 'is-active': assignmentStatsSortColumn === 'missingCount' }"
-                  type="button"
-                  data-testid="assignment-stats-sort-missing"
-                  @click="toggleAssignmentStatsSort('missingCount')"
-                >
-                  未交次数
-                  <span class="table-sort-button__mark">{{ assignmentStatsSortMark("missingCount") }}</span>
-                </button>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in paginatedMissingStatsRows" :key="row.studentId">
-              <td>{{ row.displayName }}</td>
-              <td>{{ row.studentNo }}</td>
-              <td>{{ row.submittedCount }}</td>
-              <td>{{ row.missingCount }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div
+          v-if="!missingStatsLoading && activeAssignmentStatsRows.length"
+          class="assignments-page__stats-table-frame"
+          :style="missingStatsTableFrameStyle"
+        >
+          <table class="files-table assignments-page__stats-table" data-testid="assignment-missing-table">
+            <thead>
+              <tr>
+                <th>学生</th>
+                <th>
+                  <button
+                    class="table-sort-button"
+                    :class="{ 'is-active': assignmentStatsSortColumn === 'studentNo' }"
+                    type="button"
+                    data-testid="assignment-stats-sort-student-no"
+                    @click="toggleAssignmentStatsSort('studentNo')"
+                  >
+                    学号
+                    <span class="table-sort-button__mark">{{ assignmentStatsSortMark("studentNo") }}</span>
+                  </button>
+                </th>
+                <th>
+                  <button
+                    class="table-sort-button"
+                    :class="{ 'is-active': assignmentStatsSortColumn === 'submittedCount' }"
+                    type="button"
+                    data-testid="assignment-stats-sort-submitted"
+                    @click="toggleAssignmentStatsSort('submittedCount')"
+                  >
+                    已交次数
+                    <span class="table-sort-button__mark">{{ assignmentStatsSortMark("submittedCount") }}</span>
+                  </button>
+                </th>
+                <th>
+                  <button
+                    class="table-sort-button"
+                    :class="{ 'is-active': assignmentStatsSortColumn === 'missingCount' }"
+                    type="button"
+                    data-testid="assignment-stats-sort-missing"
+                    @click="toggleAssignmentStatsSort('missingCount')"
+                  >
+                    未交次数
+                    <span class="table-sort-button__mark">{{ assignmentStatsSortMark("missingCount") }}</span>
+                  </button>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in paginatedMissingStatsRows" :key="row.studentId">
+                <td>{{ row.displayName }}</td>
+                <td>{{ row.studentNo }}</td>
+                <td>{{ row.submittedCount }}</td>
+                <td>{{ row.missingCount }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
   </div>
 
-  <div v-if="submissionDownloadOpen" class="copy-dialog-backdrop">
+  <div v-if="submissionDownloadOpen" class="copy-dialog-backdrop" @click.self="closeSubmissionDownloadDialog">
     <section class="copy-dialog assignments-page__dialog" data-testid="assignment-submissions-download-dialog">
       <div class="copy-dialog__header">
         <div>
           <div class="copy-dialog__eyebrow">提交下载</div>
           <h3 class="copy-dialog__title">{{ currentClass ? `${currentClass.name} · 作业提交包` : "作业提交包" }}</h3>
         </div>
-        <button class="button button--ghost" type="button" data-testid="assignment-submissions-download-close" @click="submissionDownloadOpen = false">
+        <button class="button button--ghost" type="button" data-testid="assignment-submissions-download-close" @click="closeSubmissionDownloadDialog">
           关闭
         </button>
       </div>
@@ -515,7 +521,7 @@
         </label>
 
         <div class="copy-dialog__actions">
-          <button class="button" type="button" @click="submissionDownloadOpen = false">取消</button>
+          <button class="button" type="button" @click="closeSubmissionDownloadDialog">取消</button>
           <a
             class="button"
             :href="allSubmissionArchiveUrl"
@@ -651,6 +657,9 @@ const paginatedMissingStatsRows = computed(() => {
   const start = (missingStatsPage.value - 1) * missingStatsPageSize.value;
   return activeAssignmentStatsRows.value.slice(start, start + missingStatsPageSize.value);
 });
+const missingStatsTableFrameStyle = computed<Record<string, string>>(() => ({
+  "--missing-stats-page-size": String(missingStatsPageSize.value),
+}));
 
 function parsePositiveInt(raw: unknown, fallback: number) {
   const parsed = Number(raw);
@@ -995,10 +1004,18 @@ async function openMissingStatsDialog() {
   await loadMissingStats();
 }
 
+function closeMissingStatsDialog() {
+  missingStatsOpen.value = false;
+}
+
 async function openSubmissionDownloadDialog() {
   submissionDownloadOpen.value = true;
   await loadMatchingAssignments();
   selectedSubmissionDownloadAssignmentIds.value = matchingAssignments.value.map((assignment) => assignment.id);
+}
+
+function closeSubmissionDownloadDialog() {
+  submissionDownloadOpen.value = false;
 }
 
 function selectAllMissingAssignmentsWithoutLoad() {
@@ -1271,6 +1288,7 @@ watch(() => route.fullPath, () => {
   justify-content: flex-start;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--border-soft);
+  flex-wrap: wrap;
 }
 
 .assignments-page__toolbar :deep(.filter-select) {
@@ -1320,11 +1338,16 @@ watch(() => route.fullPath, () => {
 .assignments-page__table th:nth-child(4),
 .assignments-page__table td:nth-child(4) {
   width: 16%;
+  white-space: nowrap;
 }
 
 .assignments-page__table th:nth-child(5),
 .assignments-page__table td:nth-child(5) {
   width: 28%;
+}
+
+.assignments-page__table .table-sort-button {
+  white-space: nowrap;
 }
 
 .assignments-page__title {
@@ -1520,6 +1543,39 @@ watch(() => route.fullPath, () => {
   font-weight: 700;
 }
 
+.assignments-page__stats-table-frame {
+  align-self: start;
+  width: 100%;
+  min-height: calc(44px * (var(--missing-stats-page-size) + 1));
+  overflow-x: auto;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  box-shadow: var(--shadow-soft);
+}
+
+.assignments-page__stats-table {
+  width: 100%;
+  min-width: 560px;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  table-layout: fixed;
+}
+
+.assignments-page__stats-table thead tr,
+.assignments-page__stats-table tbody tr {
+  height: 44px;
+}
+
+.assignments-page__stats-table th,
+.assignments-page__stats-table td {
+  box-sizing: border-box;
+  height: 44px;
+  max-height: 44px;
+}
+
 .assignments-page__stats-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -1563,20 +1619,23 @@ watch(() => route.fullPath, () => {
 
 @media (max-width: 960px) {
   .assignments-page__toolbar {
-    align-items: stretch;
+    align-items: center;
   }
 
   .assignments-page__toolbar :deep(.filter-select) {
-    flex-basis: 100%;
+    flex: 0 0 180px;
   }
 
   .assignments-page__search-group {
-    flex-basis: 100%;
+    flex: 1 1 220px;
     margin-left: 0;
+    min-width: 180px;
   }
 
   .assignments-page__search {
-    width: 100%;
+    flex: 1 1 140px;
+    min-width: 0;
+    width: auto;
   }
 
   .assignments-page__create-row {
@@ -1585,6 +1644,30 @@ watch(() => route.fullPath, () => {
 
   .assignments-page__table {
     table-layout: fixed;
+  }
+}
+
+@media (max-width: 640px) {
+  .assignments-page__dialog {
+    width: 100%;
+  }
+
+  .assignments-page__create-row,
+  .assignments-page__rule-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .assignments-page__inline-field,
+  .assignments-page__inline-field--datetime {
+    min-width: 0;
+    flex-basis: auto;
+  }
+
+  .assignments-page__attachment-manager-title,
+  .assignments-page__stats-result-row {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>
