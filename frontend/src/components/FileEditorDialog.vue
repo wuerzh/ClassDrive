@@ -3,6 +3,7 @@
     v-if="item"
     class="editor-dialog-backdrop"
     data-testid="file-editor-dialog"
+    @click.self="handleClose"
   >
     <section class="editor-dialog">
       <header class="editor-dialog__header">

@@ -83,6 +83,7 @@
     v-if="detailTeacherId"
     class="copy-dialog-backdrop"
     data-testid="teacher-detail-dialog"
+    @click.self="closeTeacherDetail"
   >
     <section class="copy-dialog teacher-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="teacher-detail-dialog-title">
       <div class="copy-dialog__header">

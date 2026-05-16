@@ -32,7 +32,7 @@ ClassDrive 是一个面向课堂教学和机房实训的局域网文件与作业
 - 作业创建与编辑：可设置标题、说明、截止时间、发布状态、提交方式、提交格式和最少文件数；支持作业附件管理。
 - 批改工作台：按姓名、学号或评语搜索提交，支持在当前筛选和排序结果中跨页切换上一位/下一位学生，列表/网格查看提交文件、预览和下载、保存批改状态与评语、一键批改本作业。
 - 统计与导出：支持多作业已交/未交次数统计、单作业未交名单、Excel 导出、多作业提交包下载；待补齐提交不计入已交，提交包仅归档已正式提交内容。
-- 系统与账号：教师个人设置、端口配置、老师账号管理、登录日志和操作日志审计。
+- 系统与账号：教师个人设置、端口配置、上传面板开关、单账号登录控制、老师账号管理、统一日志审计；登录与操作记录按时间线合并展示，可按类型、账号、身份、IP 和时间范围筛选。
 
 ### 学生端
 
@@ -45,25 +45,39 @@ ClassDrive 是一个面向课堂教学和机房实训的局域网文件与作业
 
 ## 界面预览
 
-| 教师端作业管理 | 新建作业 |
-| --- | --- |
-| ![教师端作业管理](docs/images/readme/teacher-assignment-list.png) | ![新建作业](docs/images/readme/teacher-assignment-create.png) |
+### 教师端资料空间
 
-| 多作业统计 | 作业详情与提交列表 |
-| --- | --- |
-| ![多作业统计](docs/images/readme/teacher-assignment-statistics.png) | ![作业详情与提交列表](docs/images/readme/teacher-assignment-detail.png) |
+![教师端资料空间](docs/images/readme/teacher-files.png)
 
-| 单作业未交名单 | 提交详情与批改 |
-| --- | --- |
-| ![单作业未交名单](docs/images/readme/teacher-assignment-missing.png) | ![提交详情与批改](docs/images/readme/teacher-assignment-review.png) |
+### 班级与学生管理
 
-| 学生端作业列表 | 学生端作业提交 |
-| --- | --- |
-| ![学生端作业列表](docs/images/readme/student-assignments.png) | ![学生端作业提交](docs/images/readme/student-assignment-detail.png) |
+![班级管理](docs/images/readme/teacher-classes.png)
 
-| 班级管理 | 学生管理 |
-| --- | --- |
-| ![班级管理](docs/images/readme/teacher-classes.png) | ![学生管理](docs/images/readme/teacher-students.png) |
+![学生管理](docs/images/readme/teacher-students.png)
+
+### 作业发布与批改
+
+![教师端作业管理](docs/images/readme/teacher-assignment-list.png)
+
+![新建作业](docs/images/readme/teacher-assignment-create.png)
+
+![多作业统计](docs/images/readme/teacher-assignment-statistics.png)
+
+![作业详情与提交列表](docs/images/readme/teacher-assignment-detail.png)
+
+![单作业未交名单](docs/images/readme/teacher-assignment-missing.png)
+
+![提交详情与批改](docs/images/readme/teacher-assignment-review.png)
+
+### 统一日志审计
+
+![统一日志审计](docs/images/readme/teacher-audit-logs.png)
+
+### 学生端作业
+
+![学生端作业列表](docs/images/readme/student-assignments.png)
+
+![学生端作业提交](docs/images/readme/student-assignment-detail.png)
 
 ## 快速开始
 
@@ -93,14 +107,17 @@ $env:CLASSDRIVE_PORT = "666"
 go run ./cmd/classdrive
 ```
 
+首次启动或未在设置页保存端口时，`CLASSDRIVE_PORT` 会作为启动端口；如果已经在设置页保存过访问端口，程序会优先使用保存的端口。
+
 ### 打包 Windows exe
 
 ```powershell
+node scripts/generate-brand-assets.mjs
 npm run build
 go build -o tmp/ClassDrive.exe ./cmd/classdrive
 ```
 
-`tmp/ClassDrive.exe` 适合放到 GitHub Release 附件中，不建议直接提交到源码仓库。
+`node scripts/generate-brand-assets.mjs` 会同步生成网页 favicon、页面 logo 和 Windows exe 图标资源；`go build` 会把 `cmd/classdrive/classdrive_windows_amd64.syso` 嵌入到最终 exe。`tmp/ClassDrive.exe` 适合放到 GitHub Release 附件中，不建议直接提交到源码仓库。
 
 ## 操作指引
 
@@ -170,6 +187,8 @@ npm test
 go test ./... -count=1
 ```
 
+如果当前环境没有全局 `go` 命令，但仓库内存在 `.tooling/go/`，可以使用 `npm run verify:full`；该脚本会自动解析本地 Go 运行时。
+
 完整本地检查：
 
 ```powershell
@@ -187,11 +206,14 @@ npm run test:visual:update
 README 截图生成：
 
 ```powershell
+node scripts/generate-brand-assets.mjs
 npm run build
 npm run capture:readme
 ```
 
 README 截图位于 `docs/images/readme/`。截图脚本会生成包含学生提交弹窗、待补齐状态和批改抽屉的演示数据；视觉回归基线仍由 Playwright 测试维护，两者互不复用。
+
+品牌图标源文件位于 `frontend/public/logo.svg`。如果需要调整 logo，请先运行 `node scripts/generate-brand-assets.mjs` 同步生成 `favicon.ico`、`favicon.svg` 和 exe 图标资源，再重新构建前端与 exe。
 
 ## 目录结构
 
@@ -201,7 +223,7 @@ internal/server/       后端业务、HTTP API、SQLite 数据层、前端嵌入
 frontend/              Vue 3 + TypeScript 前端
 frontend/scripts/      前端辅助脚本与截图生成脚本
 docs/images/readme/    README 使用的截图资产
-scripts/               本地验证脚本
+scripts/               本地验证脚本与品牌资产生成脚本
 ```
 
 ## 注意事项
@@ -209,4 +231,4 @@ scripts/               本地验证脚本
 - 当前项目面向单机或局域网部署，不是公网高并发网盘。
 - 本工程不兼容旧 `go-drive` 数据。
 - 开源提交时不要提交 `.tooling/`、`node_modules/`、`var/`、`tmp/`、测试结果和本地日志。
-- 正式开源前建议补充或确认 `LICENSE`，明确授权协议。
+- 本项目已包含 MIT License；发布源码或 Release 时请保留 `LICENSE`。

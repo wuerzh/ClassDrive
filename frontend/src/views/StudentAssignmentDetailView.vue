@@ -12,10 +12,11 @@
       <StatePanel v-if="loading" message="正在加载作业详情..." test-id="student-assignment-detail-loading" />
       <StatePanel v-else-if="notFound" :message="uiCopy.assignmentNotFound" tone="error" test-id="student-assignment-detail-not-found" />
       <template v-else-if="assignment">
-        <section class="student-assignment-detail__split" data-testid="student-assignment-overview">
-        <article class="student-assignment-detail__card student-assignment-detail__card--info">
-          <div class="student-assignment-detail__hero student-assignment-detail__overview-main">
+        <!-- Card 1: 作业信息 -->
+        <article class="student-assignment-detail__card" data-testid="student-assignment-overview">
+          <div class="student-assignment-detail__hero" data-testid="student-assignment-brief">
             <div class="student-assignment-detail__overview-copy">
+              <span class="student-assignment-detail__eyebrow">作业信息</span>
               <h2>{{ assignment.title }}</h2>
               <p>{{ assignment.description || uiCopy.emptyAssignmentDescription }}</p>
             </div>
@@ -28,243 +29,259 @@
               </span>
             </div>
           </div>
+
           <div
-            class="student-assignment-detail__requirement student-assignment-detail__requirement--responsive student-assignment-detail__meta-band"
+            class="student-assignment-detail__requirement-bar"
             data-testid="student-assignment-submission-requirement"
           >
-            <span class="student-assignment-detail__requirement-item student-assignment-detail__requirement-item--mode">
+            <div class="student-assignment-detail__requirement-item">
               <strong>要求</strong>
-              <span class="student-assignment-detail__requirement-value">{{ assignmentSubmissionRuleText }}</span>
-            </span>
-            <span class="student-assignment-detail__requirement-item student-assignment-detail__requirement-item--format">
+              <span>{{ assignmentSubmissionRuleText }}</span>
+            </div>
+            <div class="student-assignment-detail__requirement-item">
               <strong>格式</strong>
-              <span class="student-assignment-detail__requirement-value">{{ assignment.submissionConstraints.allowedTypesLabel }}</span>
-            </span>
-            <span class="student-assignment-detail__requirement-item student-assignment-detail__requirement-item--size">
+              <span>{{ assignment.submissionConstraints.allowedTypesLabel }}</span>
+            </div>
+            <div class="student-assignment-detail__requirement-item">
               <strong>大小</strong>
-              <span class="student-assignment-detail__requirement-value">单个文件不超过 {{ assignment.submissionConstraints.maxFileSizeLabel }}</span>
-            </span>
-            <span class="student-assignment-detail__requirement-item student-assignment-detail__requirement-item--due">
+              <span>单个文件不超过 {{ assignment.submissionConstraints.maxFileSizeLabel }}</span>
+            </div>
+            <div class="student-assignment-detail__requirement-item">
               <strong>截止</strong>
-              <span class="student-assignment-detail__requirement-value">{{ formatStudentAssignmentDateTime(assignment.dueAt) }}</span>
-            </span>
-          </div>
-          <div class="student-assignment-detail__support-strip">
-            <div class="student-assignment-detail__attachment-block" data-testid="student-assignment-attachment-block">
-              <div class="student-assignment-detail__panel-head">
-                <h4>作业附件</h4>
-                <p class="muted" v-if="!assignmentAttachments.length">{{ uiCopy.emptyStudentAttachments }}</p>
-              </div>
-              <ResourceList
-                v-if="teacherAttachmentResources.length"
-                :items="teacherAttachmentResources"
-                test-id="student-assignment-attachment-list"
-                item-test-id-prefix="student-assignment-attachment-row"
-                link-test-id-prefix="student-assignment-attachment-link"
-              />
+              <span>{{ formatStudentAssignmentDateTime(assignment.dueAt) }}</span>
             </div>
           </div>
+
+          <section
+            v-if="teacherAttachmentResources.length || !assignmentAttachments.length"
+            class="student-assignment-detail__attachment-block"
+            data-testid="student-assignment-attachment-block"
+          >
+            <h4 class="student-assignment-detail__section-title">作业附件</h4>
+            <p class="muted" v-if="!assignmentAttachments.length">{{ uiCopy.emptyStudentAttachments }}</p>
+            <ResourceList
+              v-if="teacherAttachmentResources.length"
+              :items="teacherAttachmentResources"
+              test-id="student-assignment-attachment-list"
+              item-test-id-prefix="student-assignment-attachment-row"
+              link-test-id-prefix="student-assignment-attachment-link"
+            />
+          </section>
         </article>
 
-        <article class="student-assignment-detail__card student-assignment-detail__card--submission">
-        <section
-          v-if="!assignment.overdue"
-          class="student-assignment-detail__submit-panel student-assignment-detail__submit"
-          data-testid="student-assignment-submit-panel"
-        >
-          <div class="student-assignment-detail__submit-head">
-            <div>
+        <!-- Card 2: 提交区域 -->
+        <article class="student-assignment-detail__card">
+          <section
+            v-if="!assignment.overdue"
+            class="student-assignment-detail__submit-panel"
+            data-testid="student-assignment-submit-panel"
+          >
+            <div class="student-assignment-detail__submit-head">
+              <span class="student-assignment-detail__section-kicker">提交过程</span>
               <h3>{{ assignment.submission ? "添加到当前提交" : "提交作业" }}</h3>
             </div>
-          </div>
-          <div class="student-submission-actions">
-            <button
-              class="button button--primary student-submission-actions__primary"
-              type="button"
-              data-testid="student-submission-submit"
-              @click="openSubmissionDialog"
-            >
-              {{ submitEntryButtonLabel }}
-            </button>
-            <p class="student-assignment-detail__submit-hint" data-testid="student-submission-picker-hint">
-              {{ submissionPickerHint }}
-            </p>
-          </div>
-          <p
-            v-if="submissionFeedbackText"
-            id="student-submission-submit-feedback"
-            class="student-assignment-detail__submit-feedback"
-            data-testid="student-submission-submit-feedback"
-            aria-live="polite"
-          >
-            {{ submissionFeedbackText }}
-          </p>
-        </section>
-        <section
-          v-else
-          class="student-assignment-detail__submit-panel student-assignment-detail__readonly"
-        >
-          <div class="student-assignment-detail__submit-head">
-            <div>
-              <h3>已截止，不能再提交</h3>
-            </div>
-            <span class="status-pill" :class="studentAssignmentStatusTone(assignment)">
-              {{ studentAssignmentStatusLabel(assignment) }}
-            </span>
-          </div>
-        </section>
-
-        <section
-          class="student-assignment-detail__current"
-          data-testid="student-assignment-current-submission"
-        >
-          <div class="student-assignment-detail__panel-head">
-            <div>
-              <h3>当前提交</h3>
-              <p class="muted" v-if="assignment.submission">更新：{{ formatStudentAssignmentDateTime(assignment.submission.updatedAt) }}</p>
-              <p class="muted" v-else>{{ uiCopy.emptyStudentSubmissionFiles }}</p>
-            </div>
-            <div v-if="items.length" class="student-assignment-detail__file-toolbar">
-              <div class="student-assignment-detail__file-view" role="group" aria-label="当前提交视图">
-                <button
-                  class="button"
-                  :class="{ 'button--primary': currentSubmissionViewMode === 'list' }"
-                  type="button"
-                  data-testid="student-assignment-submission-view-list"
-                  @click="setCurrentSubmissionViewMode('list')"
-                >
-                  列表
-                </button>
-                <button
-                  class="button"
-                  :class="{ 'button--primary': currentSubmissionViewMode === 'grid' }"
-                  type="button"
-                  data-testid="student-assignment-submission-view-grid"
-                  @click="setCurrentSubmissionViewMode('grid')"
-                >
-                  网格
-                </button>
-              </div>
-              <div
-                v-if="currentSubmissionViewMode === 'grid'"
-                class="student-assignment-detail__grid-size"
-                data-testid="student-assignment-submission-grid-size-controls"
-                role="group"
-                aria-label="当前提交网格大小"
+            <ol class="student-assignment-detail__steps" data-testid="student-submission-steps">
+              <li>
+                <span>1</span>
+                <strong>选择文件</strong>
+              </li>
+              <li>
+                <span>2</span>
+                <strong>核对清单</strong>
+              </li>
+              <li>
+                <span>3</span>
+                <strong>确认提交</strong>
+              </li>
+            </ol>
+            <div class="student-submission-actions">
+              <button
+                class="button button--primary student-submission-actions__primary"
+                type="button"
+                data-testid="student-submission-submit"
+                @click="openSubmissionDialog"
               >
-                <button
-                  class="button"
-                  :class="{ 'button--primary': currentSubmissionGridSize === 'small' }"
-                  type="button"
-                  data-testid="student-assignment-submission-grid-size-small"
-                  @click="setCurrentSubmissionGridSize('small')"
+                {{ submitEntryButtonLabel }}
+              </button>
+              <p class="student-assignment-detail__submit-hint" data-testid="student-submission-picker-hint">
+                {{ submissionPickerHint }}
+              </p>
+            </div>
+            <p
+              v-if="submissionFeedbackText"
+              id="student-submission-submit-feedback"
+              class="student-assignment-detail__submit-feedback"
+              data-testid="student-submission-submit-feedback"
+              aria-live="polite"
+            >
+              {{ submissionFeedbackText }}
+            </p>
+          </section>
+          <section
+            v-else
+            class="student-assignment-detail__submit-panel student-assignment-detail__readonly"
+          >
+            <div class="student-assignment-detail__submit-head">
+              <div>
+                <span class="student-assignment-detail__section-kicker">提交状态</span>
+                <h3>已截止，不能再提交</h3>
+              </div>
+              <span class="status-pill" :class="studentAssignmentStatusTone(assignment)">
+                {{ studentAssignmentStatusLabel(assignment) }}
+              </span>
+            </div>
+          </section>
+
+          <section
+            class="student-assignment-detail__current"
+            data-testid="student-assignment-current-submission"
+          >
+            <div class="student-assignment-detail__panel-head">
+              <div>
+                <h3>当前提交</h3>
+                <p class="muted" v-if="assignment.submission">更新：{{ formatStudentAssignmentDateTime(assignment.submission.updatedAt) }}</p>
+                <p class="muted" v-else>{{ uiCopy.emptyStudentSubmissionFiles }}</p>
+              </div>
+              <div v-if="items.length" class="student-assignment-detail__file-toolbar">
+                <div class="student-assignment-detail__file-view" role="group" aria-label="当前提交视图">
+                  <button
+                    class="button"
+                    :class="{ 'button--primary': currentSubmissionViewMode === 'list' }"
+                    type="button"
+                    data-testid="student-assignment-submission-view-list"
+                    @click="setCurrentSubmissionViewMode('list')"
+                  >
+                    列表
+                  </button>
+                  <button
+                    class="button"
+                    :class="{ 'button--primary': currentSubmissionViewMode === 'grid' }"
+                    type="button"
+                    data-testid="student-assignment-submission-view-grid"
+                    @click="setCurrentSubmissionViewMode('grid')"
+                  >
+                    网格
+                  </button>
+                </div>
+                <div
+                  v-if="currentSubmissionViewMode === 'grid'"
+                  class="student-assignment-detail__grid-size"
+                  data-testid="student-assignment-submission-grid-size-controls"
+                  role="group"
+                  aria-label="当前提交网格大小"
                 >
-                  小
-                </button>
-                <button
-                  class="button"
-                  :class="{ 'button--primary': currentSubmissionGridSize === 'medium' }"
-                  type="button"
-                  data-testid="student-assignment-submission-grid-size-medium"
-                  @click="setCurrentSubmissionGridSize('medium')"
-                >
-                  中
-                </button>
-                <button
-                  class="button"
-                  :class="{ 'button--primary': currentSubmissionGridSize === 'large' }"
-                  type="button"
-                  data-testid="student-assignment-submission-grid-size-large"
-                  @click="setCurrentSubmissionGridSize('large')"
-                >
-                  大
-                </button>
+                  <button
+                    class="button"
+                    :class="{ 'button--primary': currentSubmissionGridSize === 'small' }"
+                    type="button"
+                    data-testid="student-assignment-submission-grid-size-small"
+                    @click="setCurrentSubmissionGridSize('small')"
+                  >
+                    小
+                  </button>
+                  <button
+                    class="button"
+                    :class="{ 'button--primary': currentSubmissionGridSize === 'medium' }"
+                    type="button"
+                    data-testid="student-assignment-submission-grid-size-medium"
+                    @click="setCurrentSubmissionGridSize('medium')"
+                  >
+                    中
+                  </button>
+                  <button
+                    class="button"
+                    :class="{ 'button--primary': currentSubmissionGridSize === 'large' }"
+                    type="button"
+                    data-testid="student-assignment-submission-grid-size-large"
+                    @click="setCurrentSubmissionGridSize('large')"
+                  >
+                    大
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div
-            v-if="items.length && currentSubmissionViewMode === 'list'"
-            class="student-assignment-detail__file-list"
-            data-testid="student-assignment-submission-list"
-          >
-            <table class="files-table student-assignment-detail__file-table">
-              <thead>
-                <tr>
-                  <th>名称</th>
-                  <th>类型</th>
-                  <th>大小</th>
-                  <th>路径</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="row in currentSubmissionFileRows"
-                  :key="row.item.id"
-                  :data-kind="row.item.kind"
-                  :data-testid="`student-assignment-submission-row-${row.item.id}`"
-                >
-                  <td>
-                    <div class="student-assignment-detail__file-name" :style="{ paddingLeft: `${row.depth * 18}px` }">
-                      <strong>{{ row.item.name }}</strong>
-                    </div>
-                  </td>
-                  <td>{{ currentSubmissionFileTypeLabel(row.item) }}</td>
-                  <td>{{ formatSubmissionFileSize(row.item.size) ?? "文件" }}</td>
-                  <td>
-                    <span class="student-assignment-detail__file-meta">{{ currentSubmissionFilePathLabel(row.item) }}</span>
-                  </td>
-                  <td>
-                    <div class="student-assignment-detail__file-actions">
-                      <button
-                        v-if="canPreviewCurrentSubmissionItem(row.item)"
-                        class="text-button"
-                        type="button"
-                        :data-testid="`student-assignment-submission-preview-${row.item.id}`"
-                        @click="openCurrentSubmissionPreview(row.item)"
-                      >
-                        预览
-                      </button>
-                      <a
-                        class="text-button"
-                        :href="currentSubmissionDownloadUrl(row.item)"
-                        :data-testid="`student-assignment-submission-download-${row.item.id}`"
-                      >
-                  {{ row.item.kind === "dir" ? "下载压缩包" : "下载" }}
-                      </a>
-                      <button
-                        v-if="canDeleteCurrentSubmissionItem(row.item)"
-                        class="text-button text-button--danger"
-                        type="button"
-                        :data-testid="`student-assignment-submission-delete-${row.item.id}`"
-                        @click="deleteCurrentSubmissionItem(row.item)"
-                      >
-                        删除
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <SubmissionFileGrid
-            v-else-if="items.length"
-            :items="items"
-            :grid-size="currentSubmissionGridSize"
-            test-id="student-assignment-submission-grid"
-            item-test-id-prefix="student-assignment-submission-file"
-            preview-test-id-prefix="student-assignment-submission-preview"
-            thumbnail-test-id-prefix="student-assignment-submission-thumb"
-            download-test-id-prefix="student-assignment-submission-download"
-            delete-test-id-prefix="student-assignment-submission-delete"
-            :deletable="canModifyCurrentSubmission"
-            @preview="openCurrentSubmissionPreview"
-            @delete="deleteCurrentSubmissionItem"
-          />
-        </section>
+            <div
+              v-if="items.length && currentSubmissionViewMode === 'list'"
+              class="student-assignment-detail__file-list"
+              data-testid="student-assignment-submission-list"
+            >
+              <table class="files-table student-assignment-detail__file-table">
+                <thead>
+                  <tr>
+                    <th>名称</th>
+                    <th>类型</th>
+                    <th>大小</th>
+                    <th>路径</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in currentSubmissionFileRows"
+                    :key="row.item.id"
+                    :data-kind="row.item.kind"
+                    :data-testid="`student-assignment-submission-row-${row.item.id}`"
+                  >
+                    <td>
+                      <div class="student-assignment-detail__file-name" :style="{ paddingLeft: `${row.depth * 18}px` }">
+                        <strong>{{ row.item.name }}</strong>
+                      </div>
+                    </td>
+                    <td>{{ currentSubmissionFileTypeLabel(row.item) }}</td>
+                    <td>{{ formatSubmissionFileSize(row.item.size) ?? "文件" }}</td>
+                    <td>
+                      <span class="student-assignment-detail__file-meta">{{ currentSubmissionFilePathLabel(row.item) }}</span>
+                    </td>
+                    <td>
+                      <div class="student-assignment-detail__file-actions">
+                        <button
+                          v-if="canPreviewCurrentSubmissionItem(row.item)"
+                          class="text-button"
+                          type="button"
+                          :data-testid="`student-assignment-submission-preview-${row.item.id}`"
+                          @click="openCurrentSubmissionPreview(row.item)"
+                        >
+                          预览
+                        </button>
+                        <a
+                          class="text-button"
+                          :href="currentSubmissionDownloadUrl(row.item)"
+                          :data-testid="`student-assignment-submission-download-${row.item.id}`"
+                        >
+                          {{ row.item.kind === "dir" ? "下载压缩包" : "下载" }}
+                        </a>
+                        <button
+                          v-if="canDeleteCurrentSubmissionItem(row.item)"
+                          class="text-button text-button--danger"
+                          type="button"
+                          :data-testid="`student-assignment-submission-delete-${row.item.id}`"
+                          @click="deleteCurrentSubmissionItem(row.item)"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <SubmissionFileGrid
+              v-else-if="items.length"
+              :items="items"
+              :grid-size="currentSubmissionGridSize"
+              test-id="student-assignment-submission-grid"
+              item-test-id-prefix="student-assignment-submission-file"
+              preview-test-id-prefix="student-assignment-submission-preview"
+              thumbnail-test-id-prefix="student-assignment-submission-thumb"
+              download-test-id-prefix="student-assignment-submission-download"
+              delete-test-id-prefix="student-assignment-submission-delete"
+              :deletable="canModifyCurrentSubmission"
+              @preview="openCurrentSubmissionPreview"
+              @delete="deleteCurrentSubmissionItem"
+            />
+          </section>
         </article>
-        </section>
 
         <p v-if="errorText" class="form-error">{{ errorText }}</p>
       </template>
@@ -282,7 +299,7 @@
       @previous="previewPreviousCurrentSubmission"
       @next="previewNextCurrentSubmission"
     />
-    <div v-if="assignment && submissionDialogOpen" class="copy-dialog-backdrop">
+    <div v-if="assignment && submissionDialogOpen" class="copy-dialog-backdrop" @click.self="requestCloseSubmissionDialog">
       <section class="copy-dialog student-submission-dialog" data-testid="student-submission-dialog">
         <div class="copy-dialog__header">
           <div>
@@ -538,7 +555,7 @@ const submissionAccept = computed(() => (
   submissionTypeExtensions[normalizeSubmissionTypeCategory(assignment.value?.submissionTypeCategory)].join(",")
 ));
 const submissionPickerHint = computed(() => {
-  return "在弹窗中选择文件，确认后才会提交。";
+  return "在弹窗中选择文件，选择后会进入确认窗口，确认前不会提交。";
 });
 const submissionDialogHint = computed(() => {
   if (assignment.value?.submissionMode === "folder") {
@@ -551,12 +568,12 @@ const submissionDialogHint = computed(() => {
 });
 const submissionDialogSummary = computed(() => {
   if (assignment.value?.submissionMode === "folder") {
-    return "按左侧作业要求提交整个文件夹。";
+    return "按本页提交要求提交整个文件夹。";
   }
   if (assignment.value?.submissionMode === "files") {
-    return "按左侧作业要求选择文件。";
+    return "按本页提交要求选择文件。";
   }
-  return "按左侧作业要求选择文件或文件夹。";
+  return "按本页提交要求选择文件或文件夹。";
 });
 const selectedFolderRootName = computed(() => {
   for (const item of selectedFiles.value) {
@@ -978,34 +995,126 @@ onMounted(async () => {
 
 <style scoped>
 .student-assignment-detail__board {
-  gap: 0;
+  gap: 16px;
   padding: 0;
   border: 0;
   background: transparent;
   box-shadow: none;
 }
 
-.student-assignment-detail__split {
-  display: grid;
-  grid-template-columns: minmax(400px, 520px) minmax(420px, 1fr);
-  gap: 12px;
-  align-items: start;
-}
+/* ---- 卡片 ---- */
 
 .student-assignment-detail__card {
   display: grid;
-  gap: 14px;
+  gap: 18px;
   min-width: 0;
-  padding: 14px;
+  padding: 20px 22px;
   border: 1px solid var(--border-soft);
   border-radius: 14px;
   background: var(--bg-surface);
   box-shadow: var(--shadow-soft);
 }
 
-.student-assignment-detail__card--submission {
-  gap: 0;
+/* ---- Hero：标题 + 状态标签 ---- */
+
+.student-assignment-detail__hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+  padding-bottom: 2px;
 }
+
+.student-assignment-detail__overview-copy {
+  min-width: 0;
+}
+
+.student-assignment-detail__overview-copy h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.32rem;
+  line-height: 1.25;
+}
+
+.student-assignment-detail__overview-copy p {
+  max-width: 74ch;
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.student-assignment-detail__eyebrow {
+  display: inline-flex;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.student-assignment-detail__requirement-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  align-items: center;
+  padding-top: 2px;
+}
+
+/* ---- 要求信息栏 ---- */
+
+.student-assignment-detail__requirement-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+}
+
+.student-assignment-detail__requirement-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.5;
+  min-width: 0;
+}
+
+.student-assignment-detail__requirement-item strong {
+  flex: 0 0 auto;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.student-assignment-detail__requirement-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---- 附件 ---- */
+
+.student-assignment-detail__attachment-block {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  width: 100%;
+}
+
+.student-assignment-detail__section-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.96rem;
+  font-weight: 700;
+}
+
+/* ---- 提交区域 ---- */
 
 .student-assignment-detail__submit-panel,
 .student-assignment-detail__current {
@@ -1014,15 +1123,17 @@ onMounted(async () => {
 }
 
 .student-assignment-detail__submit-panel {
-  padding-bottom: 14px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .student-assignment-detail__current {
-  padding-top: 14px;
-  border-top: 1px solid var(--border-soft);
+  padding-top: 4px;
 }
 
 .student-assignment-detail__readonly {
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border-soft);
   color: var(--text-primary);
 }
 
@@ -1037,8 +1148,18 @@ onMounted(async () => {
 .student-assignment-detail__submit-head h3 {
   margin: 0;
   color: var(--text-primary);
-  font-size: 1.28rem;
+  font-size: 1.22rem;
   line-height: 1.25;
+}
+
+.student-assignment-detail__section-kicker {
+  display: inline-flex;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .student-assignment-detail__panel-head h3,
@@ -1052,163 +1173,69 @@ onMounted(async () => {
   margin: 0;
 }
 
-.student-assignment-detail__overview-main {
+/* ---- 提交流程步骤 ---- */
+
+.student-assignment-detail__steps {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 16px;
-  align-items: start;
-}
-
-.student-assignment-detail__hero {
-  padding: 0 0 2px;
-}
-
-.student-assignment-detail__overview-copy {
-  min-width: 0;
-}
-
-.student-assignment-detail__overview-copy h2 {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 1.28rem;
-  line-height: 1.25;
-}
-
-.student-assignment-detail__overview-copy p {
-  max-width: 74ch;
-  margin: 7px 0 0;
-  color: var(--text-secondary);
-  line-height: 1.5;
-}
-
-.student-assignment-detail__requirement {
-  display: grid;
-  gap: 12px 14px;
-  padding: 12px;
-  border: 1px solid var(--border-soft);
-  border-radius: 10px;
-  background: var(--bg-subtle);
-}
-
-.student-assignment-detail__requirement--responsive {
-  grid-template-columns: minmax(150px, 1fr) minmax(260px, 2fr) minmax(190px, 1.1fr) minmax(150px, 0.8fr);
-}
-
-.student-assignment-detail__card--info .student-assignment-detail__requirement--responsive {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-}
-
-.student-assignment-detail__card--info .student-assignment-detail__requirement-item--due {
-  grid-column: 1 / -1;
-}
-
-.student-assignment-detail__card--info .student-assignment-detail__requirement-item--size .student-assignment-detail__requirement-value {
-  white-space: nowrap;
-  overflow-wrap: normal;
-}
-
-.student-assignment-detail__requirement-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 6px;
-  align-items: start;
-  min-width: 0;
-  color: var(--text-secondary);
-  font-size: 0.94rem;
-  line-height: 1.5;
-}
-
-.student-assignment-detail__requirement-item--format {
-  min-width: 0;
-  grid-column: 1 / -1;
-}
-
-.student-assignment-detail__requirement strong {
-  color: var(--text-primary);
-}
-
-.student-assignment-detail__requirement-value {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.student-assignment-detail__support-strip {
-  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.student-assignment-detail__attachment-block {
-  display: grid;
-  gap: 8px;
+.student-assignment-detail__steps li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--border-soft);
   border-radius: 10px;
   background: var(--bg-subtle);
-  width: 100%;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  font-weight: 700;
 }
 
-.student-assignment-detail__requirement-tags {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-  align-items: center;
+.student-assignment-detail__steps span {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--accent-primary);
+  font-size: 0.82rem;
+  font-weight: 900;
 }
+
+.student-assignment-detail__steps strong {
+  min-width: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* ---- 提交按钮 ---- */
 
 .student-submission-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
 }
 
 .student-submission-actions__primary {
-  min-width: 116px;
+  min-width: 128px;
 }
 
 .student-assignment-detail__submit-hint {
   flex: 1 1 260px;
   margin: 0;
   color: var(--text-muted);
-  font-size: 0.94rem;
+  font-size: 0.9rem;
   line-height: 1.45;
-}
-
-.student-assignment-detail__selection {
-  display: grid;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-soft);
-  border-radius: 10px;
-  background: var(--bg-subtle);
-}
-
-.student-assignment-detail__selection strong {
-  color: var(--text-primary);
-}
-
-.student-assignment-detail__selection ul {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  color: var(--text-secondary);
-  line-height: 1.45;
-}
-
-.student-assignment-detail__selection li {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  justify-content: space-between;
-  min-width: 0;
-}
-
-.student-assignment-detail__selection li span {
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .student-assignment-detail__submit-feedback {
@@ -1217,6 +1244,8 @@ onMounted(async () => {
   font-size: 0.94rem;
   line-height: 1.45;
 }
+
+/* ---- 文件工具栏 ---- */
 
 .student-assignment-detail__file-toolbar {
   display: flex;
@@ -1239,6 +1268,8 @@ onMounted(async () => {
   padding: 5px 11px;
   border-radius: 10px;
 }
+
+/* ---- 文件列表 ---- */
 
 .student-assignment-detail__file-list {
   width: 100%;
@@ -1290,6 +1321,8 @@ onMounted(async () => {
   gap: 8px;
   align-items: center;
 }
+
+/* ---- 提交弹窗 ---- */
 
 .student-submission-dialog {
   width: min(720px, calc(100vw - 32px));
@@ -1345,20 +1378,54 @@ onMounted(async () => {
   color: var(--danger);
 }
 
-@media (max-width: 1080px) {
-  .student-assignment-detail__split {
-    grid-template-columns: minmax(0, 1fr);
-  }
+/* ---- 已选文件列表 ---- */
+
+.student-assignment-detail__selection {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-subtle);
 }
 
+.student-assignment-detail__selection strong {
+  color: var(--text-primary);
+}
+
+.student-assignment-detail__selection ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.student-assignment-detail__selection li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.student-assignment-detail__selection li span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---- 响应式 ---- */
+
 @media (max-width: 760px) {
-  .student-assignment-detail__submit-head,
-  .student-assignment-detail__panel-head {
-    flex-direction: column;
-    align-items: flex-start;
+  .student-assignment-detail__card {
+    padding: 14px 16px;
+    gap: 14px;
   }
 
-  .student-assignment-detail__overview-main {
+  .student-assignment-detail__hero {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -1367,29 +1434,25 @@ onMounted(async () => {
     min-width: 0;
   }
 
+  .student-assignment-detail__requirement-bar {
+    gap: 8px 18px;
+    padding: 10px 12px;
+  }
+
+  .student-assignment-detail__submit-head,
+  .student-assignment-detail__panel-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .student-assignment-detail__file-toolbar {
     justify-content: flex-start;
   }
 }
 
-@media (max-width: 920px) {
-  .student-assignment-detail__requirement--responsive {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-
-  .student-assignment-detail__requirement-item--format {
-    grid-column: 1 / -1;
-  }
-}
-
 @media (max-width: 560px) {
-  .student-assignment-detail__requirement--responsive {
+  .student-assignment-detail__steps {
     grid-template-columns: minmax(0, 1fr);
   }
-
-  .student-assignment-detail__requirement-item--format {
-    grid-column: auto;
-  }
-
 }
 </style>

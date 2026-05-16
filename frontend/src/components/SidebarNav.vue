@@ -1,8 +1,11 @@
 <template>
   <aside class="sidebar">
     <div class="sidebar__brand-block">
-      <div class="sidebar__brand">ClassDrive</div>
-      <p class="sidebar__brand-note">老师端文件与班级工作台</p>
+      <img class="brand-logo" src="/logo.svg" alt="ClassDrive" data-testid="sidebar-brand-logo" />
+      <div class="sidebar__brand-copy">
+        <div class="sidebar__brand">ClassDrive</div>
+        <p class="sidebar__brand-note">老师端文件与班级工作台</p>
+      </div>
     </div>
     <nav class="sidebar__nav" data-testid="sidebar-nav" aria-label="老师工作流导航">
       <section v-for="group in shellStore.navGroups" :key="group.key" class="sidebar__group">
@@ -28,7 +31,7 @@
           target="_blank"
           rel="noopener noreferrer"
           data-testid="app-author-link"
-        >wuerzh</a> | Ver: 1.2</span>
+        >wuerzh</a> | Ver: 1.3</span>
       <span>WX/QQ: 709868663</span>
     </footer>
   </aside>
@@ -46,9 +49,6 @@ function isShellItemActive(item: ShellItem): boolean {
   const path = route.path;
   if (item.key === "assignments") {
     return path === "/assignments" || path.startsWith("/assignments/");
-  }
-  if (item.key === "students") {
-    return path === "/students" || path.startsWith("/students/");
   }
   if (item.key === "settings") {
     return path === "/settings" || path.startsWith("/settings/");

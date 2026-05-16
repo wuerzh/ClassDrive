@@ -2,8 +2,11 @@
   <div class="shell student-shell">
     <aside class="sidebar student-shell__sidebar">
       <div class="sidebar__brand-block">
-        <div class="sidebar__brand">ClassDrive</div>
-        <p class="sidebar__brand-note">学生端资料与作业工作台</p>
+        <img class="brand-logo" src="/logo.svg" alt="ClassDrive" data-testid="student-sidebar-brand-logo" />
+        <div class="sidebar__brand-copy">
+          <div class="sidebar__brand">ClassDrive</div>
+          <p class="sidebar__brand-note">学生端资料与作业工作台</p>
+        </div>
       </div>
       <nav class="sidebar__nav" data-testid="student-shell-nav" aria-label="学生工作流导航">
         <section class="sidebar__group">
@@ -30,7 +33,7 @@
             target="_blank"
             rel="noopener noreferrer"
             data-testid="app-author-link"
-          >wuerzh</a> | Ver: 1.2</span>
+          >wuerzh</a> | Ver: 1.3</span>
         <span>WX/QQ: 709868663</span>
       </footer>
     </aside>

@@ -185,6 +185,22 @@ textarea {
 
 .sidebar__brand-block {
   padding: 0.15rem 0.3rem 0.8rem;
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+}
+
+.brand-logo {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  display: block;
+  border-radius: 12px;
+  box-shadow: 0 12px 24px rgba(15, 76, 129, 0.18);
+}
+
+.sidebar__brand-copy {
+  min-width: 0;
   display: grid;
   gap: 0.25rem;
 }
@@ -300,8 +316,15 @@ textarea {
 }
 
 .sidebar__footer a {
-  color: inherit;
+  color: var(--accent-strong);
+  font-weight: 700;
+  text-decoration-line: underline;
   text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.sidebar__footer a:hover {
+  color: var(--accent);
 }
 
 .topbar {
@@ -506,6 +529,21 @@ textarea {
 .login-card {
   width: min(420px, 100%);
   padding: 28px;
+}
+
+.login-card__brand {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.login-card__brand-logo {
+  width: 64px;
+  height: 64px;
+  display: block;
+  border-radius: 18px;
+  box-shadow: 0 18px 34px rgba(15, 76, 129, 0.22);
 }
 
 .login-card__eyebrow,
@@ -1745,11 +1783,52 @@ textarea:focus {
   .files-toolbar,
   .students-form,
   .students-import,
-  .assignment-summary-card,
-  .topbar__actions,
-  .topbar__context-block {
+  .assignment-summary-card {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+  }
+
+  .topbar__context-block {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .topbar__class-select {
+    min-width: 128px;
+    max-width: min(220px, 34vw);
+  }
+
+  .topbar__actions {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 0.5rem;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+
+  .topbar__user {
+    max-width: 18vw;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .topbar__theme-toggle {
+    min-width: 72px;
+  }
+
+  .classes-page__board,
+  .settings-page__panel {
+    min-width: 0;
+    overflow: hidden;
   }
 
   .classes-page__summary {
@@ -1759,5 +1838,46 @@ textarea:focus {
 
   .assignment-summary-card__action {
     justify-content: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .shell__content {
+    padding: 0 0.55rem 0.75rem;
+  }
+
+  .shell__main {
+    padding: 0.65rem 0;
+  }
+
+  .copy-dialog-backdrop {
+    place-items: stretch;
+    padding: 8px;
+  }
+
+  .copy-dialog {
+    width: 100%;
+    max-height: calc(100dvh - 16px);
+    border-radius: 14px;
+    padding: 14px;
+  }
+
+  .copy-dialog__header,
+  .copy-dialog__actions {
+    flex-wrap: wrap;
+  }
+
+  .copy-dialog__actions {
+    justify-content: stretch;
+  }
+
+  .copy-dialog__actions .button {
+    flex: 1 1 120px;
+  }
+
+  .classes-page__board,
+  .settings-page__panel {
+    min-width: 0;
+    padding: 0.6rem;
   }
 }

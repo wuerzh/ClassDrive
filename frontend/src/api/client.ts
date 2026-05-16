@@ -53,23 +53,54 @@ export interface OperationLogItem {
   method: string;
   path: string;
   statusCode: number;
+  ipAddress: string;
   summary: string;
+}
+
+export interface AuditLogItem {
+  id: number;
+  logType: "login" | "operation";
+  occurredAt: string;
+  actorType: "teacher" | "student";
+  account: string;
+  actorName: string;
+  action: string;
+  result: string;
+  ipAddress: string;
+}
+
+export interface AuditLogFilters {
+  logType?: "" | AuditLogItem["logType"];
+  actorType?: "" | AuditLogItem["actorType"];
+  result?: "" | "success" | "failure";
+  q?: string;
+  ip?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface LoginLogFilters {
   actorType?: "" | LoginLogItem["actorType"];
   status?: "" | LoginLogItem["status"];
   q?: string;
+  ip?: string;
   from?: string;
   to?: string;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface OperationLogFilters {
   actorType?: "" | OperationLogItem["actorType"];
   method?: "" | "POST" | "PUT" | "PATCH" | "DELETE";
   q?: string;
+  ip?: string;
   from?: string;
   to?: string;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface ClearAuditLogsResult {
@@ -200,6 +231,11 @@ export interface StudentAssignmentItem {
   updatedAt: string;
   overdue: boolean;
   submission: StudentSubmissionSummary | null;
+}
+
+export interface StudentAssignmentListQueryOptions {
+  page?: number;
+  pageSize?: number;
 }
 
 export interface StudentAssignmentDetail extends StudentAssignmentItem {
@@ -398,6 +434,9 @@ function buildAuditLogQueryString(filters: LoginLogFilters | OperationLogFilters
   for (const [key, value] of Object.entries(filters)) {
     if (typeof value === "string" && value.trim()) {
       params.set(key, value.trim());
+    }
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      params.set(key, String(Math.trunc(value)));
     }
   }
   const queryString = params.toString();
@@ -601,10 +640,13 @@ export const api = {
     });
   },
   loginLogs(filters: LoginLogFilters = {}) {
-    return request<{ logs: LoginLogItem[] }>(`/api/audit/login-logs${buildAuditLogQueryString(filters)}`);
+    return request<{ logs: LoginLogItem[]; pagination: PaginationPayload }>(`/api/audit/login-logs${buildAuditLogQueryString(filters)}`);
   },
   operationLogs(filters: OperationLogFilters = {}) {
-    return request<{ logs: OperationLogItem[] }>(`/api/audit/operation-logs${buildAuditLogQueryString(filters)}`);
+    return request<{ logs: OperationLogItem[]; pagination: PaginationPayload }>(`/api/audit/operation-logs${buildAuditLogQueryString(filters)}`);
+  },
+  auditLogs(filters: AuditLogFilters = {}) {
+    return request<{ logs: AuditLogItem[]; pagination: PaginationPayload }>(`/api/audit/logs${buildAuditLogQueryString(filters)}`);
   },
   clearAuditLogs(before: string) {
     const params = new URLSearchParams({ before });
@@ -671,8 +713,10 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
-  studentAssignments() {
-    return request<{ assignments: StudentAssignmentItem[]; submissionConstraints: StudentSubmissionConstraints }>("/api/student/assignments");
+  studentAssignments(options: StudentAssignmentListQueryOptions = {}) {
+    return request<{ assignments: StudentAssignmentItem[]; submissionConstraints: StudentSubmissionConstraints; pagination: PaginationPayload }>(
+      `/api/student/assignments${buildListQueryString(options)}`,
+    );
   },
   studentFiles(params: URLSearchParams) {
     return request<FilesPayload>(`/api/student/files?${params.toString()}`);

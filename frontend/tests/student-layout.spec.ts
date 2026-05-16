@@ -66,6 +66,7 @@ describe("StudentLayout", () => {
 
     expect(wrapper.get('[data-testid="student-shell-nav"]').exists()).toBe(true);
     expect(wrapper.get('[data-testid="student-shell-surface"]').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="student-sidebar-brand-logo"]').attributes("alt")).toBe("ClassDrive");
     expect(wrapper.get('[data-testid="student-topbar-context"]').text()).toContain("我的作业");
     expect(wrapper.text()).not.toContain("学生工作区");
     expect(wrapper.get(".student-shell__user").text()).toBe("20260001 · 张小明 · 一年级一班");
@@ -75,7 +76,7 @@ describe("StudentLayout", () => {
     expect(wrapper.get('[data-testid="student-theme-toggle"]').exists()).toBe(true);
     const sidebarFooterLines = wrapper.get('[data-testid="student-sidebar-footer"]').findAll("span").map((line) => line.text());
     expect(sidebarFooterLines).toEqual([
-      "Author: wuerzh | Ver: 1.2",
+      "Author: wuerzh | Ver: 1.3",
       "WX/QQ: 709868663",
     ]);
     expect(wrapper.get('[data-testid="student-sidebar-footer"]').get('[data-testid="app-author-link"]').attributes("href")).toBe(

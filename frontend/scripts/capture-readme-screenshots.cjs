@@ -18,6 +18,7 @@ const screenshotNames = [
   "teacher-assignment-detail.png",
   "teacher-assignment-missing.png",
   "teacher-assignment-review.png",
+  "teacher-audit-logs.png",
   "student-assignments.png",
   "student-assignment-detail.png",
 ];
@@ -330,9 +331,12 @@ async function captureTeacherPages(page, baseUrl, demo) {
   await page.getByText(demo.classItem.name).waitFor();
   await screenshot(page, "teacher-classes.png");
 
-  await page.goto(absoluteUrl(baseUrl, `/students?classId=${demo.classItem.id}`));
+  await page.goto(absoluteUrl(baseUrl, "/classes"));
+  await page.getByTestId(`class-students-${demo.classItem.id}`).click();
+  await page.getByTestId("class-students-drawer").waitFor();
   await page.getByText("李明").waitFor();
   await screenshot(page, "teacher-students.png");
+  await page.getByTestId("class-students-drawer-close").click();
 
   await page.goto(absoluteUrl(baseUrl, `/assignments/classes/${demo.classItem.id}`));
   await page.getByText(demo.assignments.main.title).waitFor();
@@ -365,6 +369,10 @@ async function captureTeacherPages(page, baseUrl, demo) {
   await page.locator('[data-testid^="assignment-submission-open-"]').first().click();
   await page.getByTestId("assignment-submission-review-drawer").waitFor();
   await screenshot(page, "teacher-assignment-review.png");
+
+  await page.goto(absoluteUrl(baseUrl, "/settings/logs"));
+  await page.getByTestId("audit-logs-table").waitFor();
+  await screenshot(page, "teacher-audit-logs.png");
 }
 
 async function captureStudentPages(page, baseUrl, demo) {

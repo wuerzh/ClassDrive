@@ -214,7 +214,8 @@ type loginLogPayload struct {
 }
 
 type loginLogsResult struct {
-	Logs []loginLogPayload `json:"logs"`
+	Logs       []loginLogPayload `json:"logs"`
+	Pagination paginationPayload `json:"pagination"`
 }
 
 type operationLogPayload struct {
@@ -225,11 +226,30 @@ type operationLogPayload struct {
 	Method     string `json:"method"`
 	Path       string `json:"path"`
 	StatusCode int    `json:"statusCode"`
+	IPAddress  string `json:"ipAddress"`
 	Summary    string `json:"summary"`
 }
 
 type operationLogsResult struct {
-	Logs []operationLogPayload `json:"logs"`
+	Logs       []operationLogPayload `json:"logs"`
+	Pagination paginationPayload     `json:"pagination"`
+}
+
+type auditLogPayload struct {
+	ID         int64  `json:"id"`
+	LogType    string `json:"logType"`
+	OccurredAt string `json:"occurredAt"`
+	ActorType  string `json:"actorType"`
+	Account    string `json:"account"`
+	ActorName  string `json:"actorName"`
+	Action     string `json:"action"`
+	Result     string `json:"result"`
+	IPAddress  string `json:"ipAddress"`
+}
+
+type auditLogsResult struct {
+	Logs       []auditLogPayload `json:"logs"`
+	Pagination paginationPayload `json:"pagination"`
 }
 
 type clearAuditLogsResult struct {
@@ -237,22 +257,44 @@ type clearAuditLogsResult struct {
 	DeletedOperationLogs int64 `json:"deletedOperationLogs"`
 }
 
+type auditLogFilters struct {
+	LogType   string
+	ActorType string
+	Result    string
+	Method    string
+	Query     string
+	IP        string
+	From      string
+	To        string
+	Page      int
+	PageSize  int
+	Offset    int
+}
+
 type loginLogFilters struct {
 	ActorType string
 	Status    string
 	Query     string
+	IP        string
 	From      string
 	To        string
 	Limit     int
+	Page      int
+	PageSize  int
+	Offset    int
 }
 
 type operationLogFilters struct {
 	ActorType string
 	Method    string
 	Query     string
+	IP        string
 	From      string
 	To        string
 	Limit     int
+	Page      int
+	PageSize  int
+	Offset    int
 }
 
 type teacherUserPayload struct {
@@ -618,6 +660,7 @@ type teacherAssignmentSubmissionItem struct {
 
 type studentAssignmentsResult struct {
 	Assignments           []studentAssignmentSummary   `json:"assignments"`
+	Pagination            paginationPayload            `json:"pagination"`
 	SubmissionConstraints studentSubmissionConstraints `json:"submissionConstraints"`
 }
 
@@ -926,6 +969,7 @@ func (app *App) handleLogout(writer http.ResponseWriter, request *http.Request, 
 	if cookie, err := request.Cookie(sessionCookieName); err == nil {
 		_ = app.deleteSession(cookie.Value)
 	}
+	app.recordLoginLog(request, "teacher", teacher.ID, teacher.Username, teacher.DisplayName, "success", "老师退出登录")
 
 	http.SetCookie(writer, &http.Cookie{
 		Name:     sessionCookieName,
@@ -1076,7 +1120,7 @@ func (app *App) handleStudentLogin(writer http.ResponseWriter, request *http.Req
 	app.writeJSON(writer, http.StatusOK, studentSessionResult{User: student.toSessionUser()})
 }
 
-func (app *App) handleStudentLogout(writer http.ResponseWriter, request *http.Request, _ studentRecord) {
+func (app *App) handleStudentLogout(writer http.ResponseWriter, request *http.Request, student studentRecord) {
 	if request.Method != http.MethodPost {
 		app.writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "不支持的请求方法")
 		return
@@ -1085,6 +1129,7 @@ func (app *App) handleStudentLogout(writer http.ResponseWriter, request *http.Re
 	if cookie, err := request.Cookie(studentSessionCookieName); err == nil {
 		_ = app.deleteStudentSession(cookie.Value)
 	}
+	app.recordLoginLog(request, "student", student.ID, student.StudentNo, student.DisplayName, "success", "学生退出登录")
 
 	http.SetCookie(writer, &http.Cookie{
 		Name:     studentSessionCookieName,
@@ -1142,13 +1187,21 @@ func (app *App) handleStudentAssignments(writer http.ResponseWriter, request *ht
 		return
 	}
 
-	assignments, err := app.listStudentAssignments(student)
+	query, err := parseTeacherListQuery(request.URL.Query(), "updated-desc", map[string]struct{}{
+		"updated-desc": {},
+	})
+	if err != nil {
+		app.writeDomainError(writer, err)
+		return
+	}
+	assignments, pagination, err := app.listStudentAssignmentsPage(student, query)
 	if err != nil {
 		app.writeDomainError(writer, err)
 		return
 	}
 	app.writeJSON(writer, http.StatusOK, studentAssignmentsResult{
 		Assignments:           assignments,
+		Pagination:            pagination,
 		SubmissionConstraints: studentSubmissionConstraintsPayload(),
 	})
 }
@@ -1436,6 +1489,15 @@ func (app *App) handleAuditLogs(writer http.ResponseWriter, request *http.Reques
 		app.writeDomainError(writer, err)
 		return
 	}
+	if request.Method == http.MethodGet {
+		logs, pagination, err := app.listAuditLogsPage(parseAuditLogFilters(request.URL.Query()))
+		if err != nil {
+			app.writeError(writer, http.StatusInternalServerError, "server_error", err.Error())
+			return
+		}
+		app.writeJSON(writer, http.StatusOK, auditLogsResult{Logs: logs, Pagination: pagination})
+		return
+	}
 	if request.Method != http.MethodDelete {
 		app.writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "不支持的请求方法")
 		return
@@ -1462,12 +1524,12 @@ func (app *App) handleLoginLogs(writer http.ResponseWriter, request *http.Reques
 		app.writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "不支持的请求方法")
 		return
 	}
-	logs, err := app.listLoginLogs(parseLoginLogFilters(request.URL.Query()))
+	logs, pagination, err := app.listLoginLogsPage(parseLoginLogFilters(request.URL.Query()))
 	if err != nil {
 		app.writeError(writer, http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
-	app.writeJSON(writer, http.StatusOK, loginLogsResult{Logs: logs})
+	app.writeJSON(writer, http.StatusOK, loginLogsResult{Logs: logs, Pagination: pagination})
 }
 
 func (app *App) handleOperationLogs(writer http.ResponseWriter, request *http.Request, teacher teacherRecord) {
@@ -1479,12 +1541,12 @@ func (app *App) handleOperationLogs(writer http.ResponseWriter, request *http.Re
 		app.writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "不支持的请求方法")
 		return
 	}
-	logs, err := app.listOperationLogs(parseOperationLogFilters(request.URL.Query()))
+	logs, pagination, err := app.listOperationLogsPage(parseOperationLogFilters(request.URL.Query()))
 	if err != nil {
 		app.writeError(writer, http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
-	app.writeJSON(writer, http.StatusOK, operationLogsResult{Logs: logs})
+	app.writeJSON(writer, http.StatusOK, operationLogsResult{Logs: logs, Pagination: pagination})
 }
 
 func (app *App) handleTeacherUsers(writer http.ResponseWriter, request *http.Request, teacher teacherRecord) {
@@ -5945,20 +6007,49 @@ func (app *App) findVisibleStudentAssignmentByID(assignmentID, classID int64) (*
 	return assignment, nil
 }
 
-func (app *App) listStudentAssignments(student studentRecord) ([]studentAssignmentSummary, error) {
-	assignments, err := app.listAssignments(student.ClassID)
-	if err != nil {
-		return nil, err
+func (app *App) listStudentAssignmentsPage(student studentRecord, query teacherListQuery) ([]studentAssignmentSummary, paginationPayload, error) {
+	whereClause := ` where class_id = ? and status = 'published'`
+	args := []any{student.ClassID}
+	var total int
+	if err := app.db.QueryRow(`select count(*) from assignments`+whereClause, args...).Scan(&total); err != nil {
+		return nil, paginationPayload{}, err
 	}
+
+	listQuery := `select id, class_id, title, description, due_at, status, submission_mode, submission_type_category, min_file_count, created_at, updated_at
+from assignments` + whereClause + ` order by updated_at desc, id desc`
+	listArgs := append([]any{}, args...)
+	if query.Paged {
+		listQuery += ` limit ? offset ?`
+		listArgs = append(listArgs, query.PageSize, query.Offset)
+	}
+	rows, err := app.db.Query(listQuery, listArgs...)
+	if err != nil {
+		return nil, paginationPayload{}, err
+	}
+	defer rows.Close()
+
 	now := time.Now().UTC()
 	items := make([]studentAssignmentSummary, 0)
-	for _, assignment := range assignments {
-		if assignment.Status != "published" {
-			continue
+	for rows.Next() {
+		var assignment assignmentSummary
+		if err := rows.Scan(
+			&assignment.ID,
+			&assignment.ClassID,
+			&assignment.Title,
+			&assignment.Description,
+			&assignment.DueAt,
+			&assignment.Status,
+			&assignment.SubmissionMode,
+			&assignment.SubmissionTypeCategory,
+			&assignment.MinFileCount,
+			&assignment.CreatedAt,
+			&assignment.UpdatedAt,
+		); err != nil {
+			return nil, paginationPayload{}, err
 		}
 		submission, err := app.findAssignmentSubmissionByAssignmentAndStudent(assignment.ID, student.ID)
 		if err != nil {
-			return nil, err
+			return nil, paginationPayload{}, err
 		}
 		items = append(items, studentAssignmentSummary{
 			ID:                     assignment.ID,
@@ -5976,7 +6067,10 @@ func (app *App) listStudentAssignments(student studentRecord) ([]studentAssignme
 			Submission:             toAssignmentSubmissionSummary(submission),
 		})
 	}
-	return items, nil
+	if err := rows.Err(); err != nil {
+		return nil, paginationPayload{}, err
+	}
+	return items, buildTeacherListPagination(total, query, len(items)), nil
 }
 
 func (app *App) listAssignmentSubmissions(assignmentID, classID int64, query teacherListQuery) ([]teacherAssignmentSubmissionItem, paginationPayload, error) {
@@ -8234,6 +8328,13 @@ func operationLogSummary(method, requestPath string) string {
 		return method + " " + requestPath
 	}
 	switch segments[1] {
+	case "auth":
+		if len(segments) >= 3 && segments[2] == "logout" && method == http.MethodPost {
+			return "老师退出登录"
+		}
+		return methodOperationSummary(method, "老师登录操作", "更新老师认证", "删除老师认证")
+	case "student":
+		return studentOperationSummary(method, segments)
 	case "classes":
 		return methodOperationSummary(method, "创建班级", "修改班级", "删除班级")
 	case "students":
@@ -8259,12 +8360,28 @@ func operationLogSummary(method, requestPath string) string {
 		if len(segments) >= 3 && segments[2] == "logs" && method == http.MethodDelete {
 			return "清理日志"
 		}
-		return method + " " + requestPath
+		return methodOperationSummary(method, "新增日志设置", "修改日志设置", "删除日志设置")
 	case "preferences":
 		return "修改偏好设置"
 	default:
-		return method + " " + requestPath
+		return methodOperationSummary(method, "执行操作", "更新操作", "删除操作")
 	}
+}
+
+func studentOperationSummary(method string, segments []string) string {
+	if len(segments) >= 3 && segments[2] == "auth" {
+		if len(segments) >= 4 && segments[3] == "logout" && method == http.MethodPost {
+			return "学生退出登录"
+		}
+		return methodOperationSummary(method, "学生登录操作", "更新学生认证", "删除学生认证")
+	}
+	if len(segments) >= 5 && segments[2] == "assignments" && segments[4] == "submission" {
+		return methodOperationSummary(method, "提交作业", "更新作业提交", "撤回作业提交")
+	}
+	if len(segments) >= 4 && segments[2] == "files" {
+		return fileOperationSummary(method, segments[1:])
+	}
+	return methodOperationSummary(method, "学生端操作", "更新学生端操作", "删除学生端操作")
 }
 
 func methodOperationSummary(method, createText, updateText, deleteText string) string {
@@ -8323,16 +8440,37 @@ func downloadOperationSummary(requestPath string) string {
 }
 
 func (app *App) listLoginLogs(filters loginLogFilters) ([]loginLogPayload, error) {
+	logs, _, err := app.listLoginLogsPage(filters)
+	return logs, err
+}
+
+func (app *App) listLoginLogsPage(filters loginLogFilters) ([]loginLogPayload, paginationPayload, error) {
+	if filters.Page <= 0 {
+		filters.Page = 1
+	}
+	if filters.PageSize <= 0 {
+		filters.PageSize = filters.Limit
+		if filters.PageSize <= 0 {
+			filters.PageSize = 500
+		}
+	}
+	if filters.Offset < 0 {
+		filters.Offset = 0
+	}
 	where, args := buildLoginLogFilterWhere(filters)
-	args = append(args, filters.Limit)
+	var total int
+	if err := app.db.QueryRow(`select count(*) from login_logs where `+where, args...).Scan(&total); err != nil {
+		return nil, paginationPayload{}, err
+	}
+	args = append(args, filters.PageSize, filters.Offset)
 	rows, err := app.db.Query(`
 select id, occurred_at, actor_type, actor_name, username, status, ip_address, message
 from login_logs
 where `+where+`
 order by id desc
-limit ?`, args...)
+limit ? offset ?`, args...)
 	if err != nil {
-		return nil, err
+		return nil, paginationPayload{}, err
 	}
 	defer rows.Close()
 
@@ -8340,36 +8478,191 @@ limit ?`, args...)
 	for rows.Next() {
 		var item loginLogPayload
 		if err := rows.Scan(&item.ID, &item.OccurredAt, &item.ActorType, &item.ActorName, &item.Username, &item.Status, &item.IPAddress, &item.Message); err != nil {
-			return nil, err
+			return nil, paginationPayload{}, err
 		}
 		logs = append(logs, item)
 	}
-	return logs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, paginationPayload{}, err
+	}
+	return logs, buildAuditLogPagination(total, filters.Page, filters.PageSize), nil
 }
 
 func (app *App) listOperationLogs(filters operationLogFilters) ([]operationLogPayload, error) {
+	logs, _, err := app.listOperationLogsPage(filters)
+	return logs, err
+}
+
+func (app *App) listOperationLogsPage(filters operationLogFilters) ([]operationLogPayload, paginationPayload, error) {
+	if filters.Page <= 0 {
+		filters.Page = 1
+	}
+	if filters.PageSize <= 0 {
+		filters.PageSize = filters.Limit
+		if filters.PageSize <= 0 {
+			filters.PageSize = 500
+		}
+	}
+	if filters.Offset < 0 {
+		filters.Offset = 0
+	}
 	where, args := buildOperationLogFilterWhere(filters)
-	args = append(args, filters.Limit)
+	var total int
+	if err := app.db.QueryRow(`select count(*) from operation_logs where `+where, args...).Scan(&total); err != nil {
+		return nil, paginationPayload{}, err
+	}
+	args = append(args, filters.PageSize, filters.Offset)
 	rows, err := app.db.Query(`
-select id, occurred_at, actor_type, actor_name, method, path, status_code, summary
+select id, occurred_at, actor_type, actor_name, method, path, status_code, ip_address, summary
 from operation_logs
 where `+where+`
 order by id desc
-limit ?`, args...)
+limit ? offset ?`, args...)
 	if err != nil {
-		return nil, err
+		return nil, paginationPayload{}, err
 	}
 	defer rows.Close()
 
 	logs := make([]operationLogPayload, 0)
 	for rows.Next() {
 		var item operationLogPayload
-		if err := rows.Scan(&item.ID, &item.OccurredAt, &item.ActorType, &item.ActorName, &item.Method, &item.Path, &item.StatusCode, &item.Summary); err != nil {
-			return nil, err
+		if err := rows.Scan(&item.ID, &item.OccurredAt, &item.ActorType, &item.ActorName, &item.Method, &item.Path, &item.StatusCode, &item.IPAddress, &item.Summary); err != nil {
+			return nil, paginationPayload{}, err
 		}
+		item.Summary = normalizeOperationLogSummary(item.Method, item.Path, item.Summary)
 		logs = append(logs, item)
 	}
-	return logs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, paginationPayload{}, err
+	}
+	return logs, buildAuditLogPagination(total, filters.Page, filters.PageSize), nil
+}
+
+func (app *App) listAuditLogsPage(filters auditLogFilters) ([]auditLogPayload, paginationPayload, error) {
+	if filters.Page <= 0 {
+		filters.Page = 1
+	}
+	if filters.PageSize <= 0 {
+		filters.PageSize = 8
+	}
+	if filters.Offset < 0 {
+		filters.Offset = 0
+	}
+	loginWhere, loginArgs := buildLoginLogFilterWhere(loginLogFilters{
+		ActorType: filters.ActorType,
+		Status:    auditLoginStatusFilter(filters),
+		Query:     filters.Query,
+		IP:        filters.IP,
+		From:      filters.From,
+		To:        filters.To,
+	})
+	operationWhere, operationArgs := buildOperationLogFilterWhere(operationLogFilters{
+		ActorType: filters.ActorType,
+		Method:    filters.Method,
+		Query:     filters.Query,
+		IP:        filters.IP,
+		From:      filters.From,
+		To:        filters.To,
+	})
+	if filters.Result == "success" {
+		operationWhere += " and status_code >= 200 and status_code < 300"
+	} else if filters.Result == "failure" {
+		operationWhere += " and status_code >= 400"
+	}
+
+	total := 0
+	queryParts := make([]string, 0, 2)
+	args := make([]any, 0, len(loginArgs)+len(operationArgs)+2)
+	if filters.LogType == "" || filters.LogType == "login" {
+		loginCount, err := app.countAuditLogRows("login_logs", loginWhere, loginArgs)
+		if err != nil {
+			return nil, paginationPayload{}, err
+		}
+		total += loginCount
+		queryParts = append(queryParts, `
+select id, 'login' as log_type, occurred_at, actor_type, username as account, actor_name, message as action, status as result, ip_address, '' as method, '' as path
+from login_logs
+where `+loginWhere)
+		args = append(args, loginArgs...)
+	}
+	if filters.LogType == "" || filters.LogType == "operation" {
+		operationCount, err := app.countAuditLogRows("operation_logs", operationWhere, operationArgs)
+		if err != nil {
+			return nil, paginationPayload{}, err
+		}
+		total += operationCount
+		queryParts = append(queryParts, `
+select id, 'operation' as log_type, occurred_at, actor_type, actor_name as account, actor_name, summary as action, case when status_code >= 200 and status_code < 300 then 'success' else 'failure' end as result, ip_address, method, path
+from operation_logs
+where `+operationWhere)
+		args = append(args, operationArgs...)
+	}
+	if len(queryParts) == 0 {
+		return []auditLogPayload{}, buildAuditLogPagination(0, filters.Page, filters.PageSize), nil
+	}
+	args = append(args, filters.PageSize, filters.Offset)
+	rows, err := app.db.Query(`
+select id, log_type, occurred_at, actor_type, account, actor_name, action, result, ip_address, method, path
+from (`+strings.Join(queryParts, "\nunion all\n")+`)
+order by occurred_at desc, id desc
+limit ? offset ?`, args...)
+	if err != nil {
+		return nil, paginationPayload{}, err
+	}
+	defer rows.Close()
+
+	logs := make([]auditLogPayload, 0)
+	for rows.Next() {
+		var item auditLogPayload
+		var method string
+		var requestPath string
+		if err := rows.Scan(&item.ID, &item.LogType, &item.OccurredAt, &item.ActorType, &item.Account, &item.ActorName, &item.Action, &item.Result, &item.IPAddress, &method, &requestPath); err != nil {
+			return nil, paginationPayload{}, err
+		}
+		if item.LogType == "operation" {
+			item.Action = normalizeOperationLogSummary(method, requestPath, item.Action)
+		}
+		item.Result = auditLogResultLabel(item.Result)
+		logs = append(logs, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, paginationPayload{}, err
+	}
+	return logs, buildAuditLogPagination(total, filters.Page, filters.PageSize), nil
+}
+
+func (app *App) countAuditLogRows(tableName string, where string, args []any) (int, error) {
+	var total int
+	if err := app.db.QueryRow(`select count(*) from `+tableName+` where `+where, args...).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func auditLoginStatusFilter(filters auditLogFilters) string {
+	if filters.Result == "success" || filters.Result == "failure" {
+		return filters.Result
+	}
+	return ""
+}
+
+func auditLogResultLabel(result string) string {
+	if result == "success" {
+		return "成功"
+	}
+	if result == "failure" {
+		return "失败"
+	}
+	return result
+}
+
+func normalizeOperationLogSummary(method, requestPath, summary string) string {
+	trimmed := strings.TrimSpace(summary)
+	pathSummary := strings.TrimSpace(method + " " + requestPath)
+	if trimmed == "" || trimmed == pathSummary || strings.Contains(trimmed, " /api/") {
+		return operationLogSummary(method, requestPath)
+	}
+	return trimmed
 }
 
 func (app *App) clearAuditLogsBefore(before string) (clearAuditLogsResult, error) {
@@ -8405,24 +8698,61 @@ func (app *App) clearAuditLogsBefore(before string) (clearAuditLogsResult, error
 }
 
 func parseLoginLogFilters(values url.Values) loginLogFilters {
+	page, pageSize, offset := parseAuditPagination(values)
+	limit := parseAuditLimit(values.Get("limit"))
+	if values.Get("pageSize") == "" && values.Get("page") == "" {
+		pageSize = limit
+		offset = 0
+	}
 	return loginLogFilters{
 		ActorType: normalizeAuditEnum(values.Get("actorType"), []string{"teacher", "student"}),
 		Status:    normalizeAuditEnum(values.Get("status"), []string{"success", "failure"}),
 		Query:     strings.TrimSpace(values.Get("q")),
+		IP:        strings.TrimSpace(values.Get("ip")),
 		From:      normalizeAuditDateBound(values.Get("from"), false),
 		To:        normalizeAuditDateBound(values.Get("to"), true),
-		Limit:     parseAuditLimit(values.Get("limit")),
+		Limit:     limit,
+		Page:      page,
+		PageSize:  pageSize,
+		Offset:    offset,
 	}
 }
 
 func parseOperationLogFilters(values url.Values) operationLogFilters {
+	page, pageSize, offset := parseAuditPagination(values)
+	limit := parseAuditLimit(values.Get("limit"))
+	if values.Get("pageSize") == "" && values.Get("page") == "" {
+		pageSize = limit
+		offset = 0
+	}
 	return operationLogFilters{
 		ActorType: normalizeAuditEnum(values.Get("actorType"), []string{"teacher", "student"}),
 		Method:    normalizeAuditEnum(strings.ToUpper(values.Get("method")), []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}),
 		Query:     strings.TrimSpace(values.Get("q")),
+		IP:        strings.TrimSpace(values.Get("ip")),
 		From:      normalizeAuditDateBound(values.Get("from"), false),
 		To:        normalizeAuditDateBound(values.Get("to"), true),
-		Limit:     parseAuditLimit(values.Get("limit")),
+		Limit:     limit,
+		Page:      page,
+		PageSize:  pageSize,
+		Offset:    offset,
+	}
+}
+
+func parseAuditLogFilters(values url.Values) auditLogFilters {
+	page, pageSize, offset := parseAuditPagination(values)
+	return auditLogFilters{
+		LogType:   normalizeAuditEnum(values.Get("logType"), []string{"login", "operation"}),
+		ActorType: normalizeAuditEnum(values.Get("actorType"), []string{"teacher", "student"}),
+		Result:    normalizeAuditEnum(values.Get("result"), []string{"success", "failure"}),
+		Method:    normalizeAuditEnum(strings.ToUpper(values.Get("method")), []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}),
+		Query:     strings.TrimSpace(values.Get("q")),
+		IP:        strings.TrimSpace(values.Get("ip")),
+		From:      normalizeAuditDateBound(values.Get("from"), false),
+		To:        normalizeAuditDateBound(values.Get("to"), true),
+		Page:      page,
+		PageSize:  pageSize,
+		Offset:    offset,
 	}
 }
 
@@ -8468,12 +8798,49 @@ func normalizeAuditDateBound(raw string, endOfDay bool) string {
 func parseAuditLimit(raw string) int {
 	limit, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil || limit <= 0 {
-		return 100
-	}
-	if limit > 500 {
 		return 500
 	}
+	if limit > 2000 {
+		return 2000
+	}
 	return limit
+}
+
+func parseAuditPagination(values url.Values) (int, int, int) {
+	page := 1
+	pageSize := 8
+	if parsedPage, err := strconv.Atoi(strings.TrimSpace(values.Get("page"))); err == nil && parsedPage > 0 {
+		page = parsedPage
+	}
+	if parsedPageSize, err := strconv.Atoi(strings.TrimSpace(values.Get("pageSize"))); err == nil && parsedPageSize > 0 {
+		pageSize = parsedPageSize
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	return page, pageSize, (page - 1) * pageSize
+}
+
+func buildAuditLogPagination(total int, page int, pageSize int) paginationPayload {
+	if total < 0 {
+		total = 0
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 8
+	}
+	totalPages := 1
+	if total > 0 {
+		totalPages = (total + pageSize - 1) / pageSize
+	}
+	return paginationPayload{
+		Page:       page,
+		PageSize:   pageSize,
+		Total:      total,
+		TotalPages: totalPages,
+	}
 }
 
 func buildLoginLogFilterWhere(filters loginLogFilters) (string, []any) {
@@ -8494,6 +8861,10 @@ func buildLoginLogFilterWhere(filters loginLogFilters) (string, []any) {
 	if filters.To != "" {
 		conditions = append(conditions, "occurred_at <= ?")
 		args = append(args, filters.To)
+	}
+	if filters.IP != "" {
+		conditions = append(conditions, "ip_address like ?")
+		args = append(args, "%"+filters.IP+"%")
 	}
 	if filters.Query != "" {
 		like := "%" + filters.Query + "%"
@@ -8522,12 +8893,37 @@ func buildOperationLogFilterWhere(filters operationLogFilters) (string, []any) {
 		conditions = append(conditions, "occurred_at <= ?")
 		args = append(args, filters.To)
 	}
+	if filters.IP != "" {
+		conditions = append(conditions, "ip_address like ?")
+		args = append(args, "%"+filters.IP+"%")
+	}
 	if filters.Query != "" {
 		like := "%" + filters.Query + "%"
-		conditions = append(conditions, "(actor_name like ? or path like ? or summary like ?)")
-		args = append(args, like, like, like)
+		pathLikes := operationLogQueryPathLikes(filters.Query)
+		pathConditions := make([]string, 0, len(pathLikes))
+		queryArgs := []any{like, like, like}
+		for _, pathLike := range pathLikes {
+			pathConditions = append(pathConditions, "path like ?")
+			queryArgs = append(queryArgs, pathLike)
+		}
+		queryConditions := []string{"actor_name like ?", "path like ?", "summary like ?"}
+		queryConditions = append(queryConditions, pathConditions...)
+		conditions = append(conditions, "("+strings.Join(queryConditions, " or ")+")")
+		args = append(args, queryArgs...)
 	}
 	return strings.Join(conditions, " and "), args
+}
+
+func operationLogQueryPathLikes(query string) []any {
+	trimmed := strings.TrimSpace(query)
+	pathLikes := make([]any, 0, 2)
+	if strings.Contains(trimmed, "退出") || strings.Contains(strings.ToLower(trimmed), "logout") {
+		pathLikes = append(pathLikes, "%/logout%")
+	}
+	if strings.Contains(trimmed, "提交") || strings.Contains(strings.ToLower(trimmed), "submission") {
+		pathLikes = append(pathLikes, "%/submission%")
+	}
+	return pathLikes
 }
 
 func nullablePositiveInt64(value int64) any {

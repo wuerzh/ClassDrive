@@ -3,45 +3,35 @@
     <section class="settings-page__panel audit-logs-page__filters" data-testid="audit-logs-filters">
       <div class="audit-logs-page__filter-row">
         <label class="app-field">
-          <span>登录账号</span>
-          <input v-model="loginFilters.q" class="copy-dialog__search" type="text" data-testid="audit-login-query" />
+          <span>日志类型</span>
+          <select v-model="filters.logType" class="copy-dialog__search" data-testid="audit-log-type">
+            <option value="">全部</option>
+            <option value="login">登录日志</option>
+            <option value="operation">操作日志</option>
+          </select>
         </label>
         <label class="app-field">
-          <span>登录身份</span>
-          <select v-model="loginFilters.actorType" class="copy-dialog__search" data-testid="audit-login-actor">
+          <span>关键词</span>
+          <input v-model="filters.q" class="copy-dialog__search" type="text" data-testid="audit-log-query" />
+        </label>
+        <label class="app-field">
+          <span>IP 地址</span>
+          <input v-model="auditIpQuery" class="copy-dialog__search" type="text" data-testid="audit-ip-query" />
+        </label>
+        <label class="app-field">
+          <span>身份</span>
+          <select v-model="filters.actorType" class="copy-dialog__search" data-testid="audit-log-actor">
             <option value="">全部</option>
             <option value="teacher">老师</option>
             <option value="student">学生</option>
           </select>
         </label>
         <label class="app-field">
-          <span>登录结果</span>
-          <select v-model="loginFilters.status" class="copy-dialog__search" data-testid="audit-login-status">
+          <span>结果</span>
+          <select v-model="filters.result" class="copy-dialog__search" data-testid="audit-log-result">
             <option value="">全部</option>
             <option value="success">成功</option>
             <option value="failure">失败</option>
-          </select>
-        </label>
-        <label class="app-field">
-          <span>操作关键词</span>
-          <input v-model="operationFilters.q" class="copy-dialog__search" type="text" data-testid="audit-operation-query" />
-        </label>
-        <label class="app-field">
-          <span>操作身份</span>
-          <select v-model="operationFilters.actorType" class="copy-dialog__search" data-testid="audit-operation-actor">
-            <option value="">全部</option>
-            <option value="teacher">老师</option>
-            <option value="student">学生</option>
-          </select>
-        </label>
-        <label class="app-field">
-          <span>操作类型</span>
-          <select v-model="operationFilters.method" class="copy-dialog__search" data-testid="audit-operation-method">
-            <option value="">全部</option>
-            <option value="POST">POST</option>
-            <option value="PUT">PUT</option>
-            <option value="PATCH">PATCH</option>
-            <option value="DELETE">DELETE</option>
           </select>
         </label>
         <label class="app-field">
@@ -100,75 +90,61 @@
       </div>
     </section>
 
-    <section class="settings-page__panel audit-logs-page__panel" data-testid="login-logs-panel">
+    <section class="settings-page__panel audit-logs-page__panel" data-testid="audit-logs-panel">
       <div class="audit-logs-page__head">
         <div>
-          <div class="classes-page__eyebrow">登录日志</div>
-          <h3>最近登录</h3>
+          <div class="classes-page__eyebrow">日志审计</div>
+          <h3>最近日志</h3>
         </div>
         <div class="audit-logs-page__head-actions">
-          <button class="button button--ghost" type="button" data-testid="audit-logs-export-login" :disabled="!loginLogs.length" @click="exportLoginLogs">导出</button>
+          <button class="button button--ghost" type="button" data-testid="audit-logs-export" :disabled="!logs.length" @click="exportAuditLogs">
+            导出日志
+          </button>
           <button class="button button--ghost" type="button" data-testid="audit-logs-refresh" @click="loadLogs">刷新</button>
         </div>
       </div>
-      <table class="files-table audit-logs-page__table" data-testid="login-logs-table">
-        <thead>
-          <tr>
-            <th>时间</th>
-            <th>账号</th>
-            <th>身份</th>
-            <th>结果</th>
-            <th>地址</th>
-            <th>说明</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in loginLogs" :key="item.id">
-            <td>{{ formatAuditTime(item.occurredAt) }}</td>
-            <td>{{ item.username || item.actorName || "-" }}</td>
-            <td>{{ actorTypeLabel(item.actorType) }}</td>
-            <td>{{ loginStatusLabel(item.status) }}</td>
-            <td>{{ item.ipAddress || "-" }}</td>
-            <td>{{ item.message || "-" }}</td>
-          </tr>
-          <tr v-if="!loginLogs.length">
-            <td class="files-table__empty" colspan="6">{{ loading ? "正在加载登录日志..." : "暂无登录日志" }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
 
-    <section class="settings-page__panel audit-logs-page__panel" data-testid="operation-logs-panel">
-      <div class="audit-logs-page__head">
-        <div>
-          <div class="classes-page__eyebrow">操作日志</div>
-          <h3>最近操作</h3>
-        </div>
-        <button class="button button--ghost" type="button" data-testid="audit-logs-export-operation" :disabled="!operationLogs.length" @click="exportOperationLogs">导出</button>
+      <div class="audit-logs-page__table-wrap">
+        <table class="files-table audit-logs-page__table" data-testid="audit-logs-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>类型</th>
+              <th>账号</th>
+              <th>身份</th>
+              <th>说明</th>
+              <th>IP 地址</th>
+              <th>结果</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in logs" :key="`${item.logType}-${item.id}`">
+              <td>{{ formatAuditTime(item.occurredAt) }}</td>
+              <td>{{ auditLogTypeLabel(item.logType) }}</td>
+              <td>{{ item.account || item.actorName || "-" }}</td>
+              <td>{{ actorTypeLabel(item.actorType) }}</td>
+              <td>{{ item.action || "-" }}</td>
+              <td>{{ item.ipAddress || "-" }}</td>
+              <td>{{ item.result || "-" }}</td>
+            </tr>
+            <tr v-if="!logs.length">
+              <td class="files-table__empty" colspan="7">{{ loading ? "正在加载日志..." : "暂无日志" }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
-      <table class="files-table audit-logs-page__table" data-testid="operation-logs-table">
-        <thead>
-          <tr>
-            <th>时间</th>
-            <th>账号</th>
-            <th>身份</th>
-            <th>操作</th>
-            <th>结果</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in operationLogs" :key="item.id">
-            <td>{{ formatAuditTime(item.occurredAt) }}</td>
-            <td>{{ item.actorName || actorTypeLabel(item.actorType) }}</td>
-            <td>{{ actorTypeLabel(item.actorType) }}</td>
-            <td>{{ item.summary }}</td>
-            <td>{{ operationStatusLabel(item.statusCode) }}</td>
-          </tr>
-          <tr v-if="!operationLogs.length">
-            <td class="files-table__empty" colspan="5">{{ loading ? "正在加载操作日志..." : "暂无操作日志" }}</td>
-          </tr>
-        </tbody>
-      </table>
+
+      <PaginationControls
+        :page="logPage"
+        :page-size="logPageSize"
+        :page-size-options="auditLogPageSizeOptions"
+        :total="logPagination.total"
+        :total-pages="logTotalPages"
+        test-id-prefix="audit-log"
+        @update:page-size="updateLogPageSize"
+        @prev="goPrevLogPage"
+        @next="goNextLogPage"
+      />
     </section>
 
     <p v-if="clearFeedback" class="muted" data-testid="audit-clear-feedback">{{ clearFeedback }}</p>
@@ -192,34 +168,39 @@ import { ElDatePicker } from "element-plus";
 import {
   api,
   ApiError,
-  type LoginLogFilters,
-  type LoginLogItem,
-  type OperationLogFilters,
-  type OperationLogItem,
+  type AuditLogFilters,
+  type AuditLogItem,
+  type PaginationPayload,
 } from "@/api/client";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
+import PaginationControls from "@/components/PaginationControls.vue";
 import { exportRowsToSpreadsheet } from "@/utils/spreadsheet-export";
 
-const loginLogs = ref<LoginLogItem[]>([]);
-const operationLogs = ref<OperationLogItem[]>([]);
+const logs = ref<AuditLogItem[]>([]);
 const loading = ref(false);
 const errorText = ref("");
-const loginFilters = reactive<LoginLogFilters>({
+const filters = reactive<AuditLogFilters>({
+  logType: "",
   actorType: "",
-  status: "",
+  result: "",
   q: "",
 });
-const operationFilters = reactive<OperationLogFilters>({
-  actorType: "",
-  method: "",
-  q: "",
-});
+const auditIpQuery = ref("");
 const sharedDateFrom = ref("");
 const sharedDateTo = ref("");
 const clearBeforeDate = ref("");
 const clearConfirmOpen = ref(false);
 const clearLoading = ref(false);
 const clearFeedback = ref("");
+const auditLogPageSizeOptions = [8, 16, 30];
+const logPage = ref(1);
+const logPageSize = ref(8);
+const logPagination = ref<PaginationPayload>({
+  page: 1,
+  pageSize: 8,
+  total: 0,
+  totalPages: 1,
+});
 let logsRequestToken = 0;
 let filterTimer: number | undefined;
 
@@ -227,15 +208,15 @@ const clearConfirmMessage = computed(() => (
   `将清理 ${clearBeforeDate.value || "所选日期"} 以前的登录日志和操作日志。该操作不可撤销。`
 ));
 const filterSignature = computed(() => JSON.stringify({
-  loginActorType: loginFilters.actorType,
-  loginStatus: loginFilters.status,
-  loginQuery: loginFilters.q,
-  operationActorType: operationFilters.actorType,
-  operationMethod: operationFilters.method,
-  operationQuery: operationFilters.q,
+  logType: filters.logType,
+  actorType: filters.actorType,
+  result: filters.result,
+  query: filters.q,
+  ip: auditIpQuery.value,
   from: sharedDateFrom.value,
   to: sharedDateTo.value,
 }));
+const logTotalPages = computed(() => Math.max(1, logPagination.value.totalPages));
 
 function formatAuditTime(value: string): string {
   const parsed = new Date(value);
@@ -245,22 +226,12 @@ function formatAuditTime(value: string): string {
   return parsed.toLocaleString("zh-CN", { hour12: false });
 }
 
-function actorTypeLabel(value: LoginLogItem["actorType"] | OperationLogItem["actorType"]): string {
+function actorTypeLabel(value: AuditLogItem["actorType"]): string {
   return value === "student" ? "学生" : "老师";
 }
 
-function loginStatusLabel(value: LoginLogItem["status"]): string {
-  return value === "success" ? "成功" : "失败";
-}
-
-function operationStatusLabel(value: number): string {
-  if (value >= 200 && value < 300) {
-    return "成功";
-  }
-  if (value >= 400) {
-    return `失败（${value}）`;
-  }
-  return String(value);
+function auditLogTypeLabel(value: AuditLogItem["logType"]): string {
+  return value === "login" ? "登录" : "操作";
 }
 
 async function loadLogs(): Promise<void> {
@@ -268,32 +239,27 @@ async function loadLogs(): Promise<void> {
   loading.value = true;
   errorText.value = "";
   try {
-    const loginQuery: LoginLogFilters = {
-      ...loginFilters,
+    const query: AuditLogFilters = {
+      ...filters,
+      ip: auditIpQuery.value,
       from: sharedDateFrom.value,
       to: sharedDateTo.value,
+      page: logPage.value,
+      pageSize: logPageSize.value,
     };
-    const operationQuery: OperationLogFilters = {
-      ...operationFilters,
-      from: sharedDateFrom.value,
-      to: sharedDateTo.value,
-    };
-    const [loginResponse, operationResponse] = await Promise.all([
-      api.loginLogs(loginQuery),
-      api.operationLogs(operationQuery),
-    ]);
+    const response = await api.auditLogs(query);
     if (requestToken !== logsRequestToken) {
       return;
     }
-    loginLogs.value = loginResponse.logs ?? [];
-    operationLogs.value = operationResponse.logs ?? [];
+    logs.value = response.logs ?? [];
+    logPagination.value = response.pagination;
   } catch (error) {
     if (requestToken !== logsRequestToken) {
       return;
     }
     errorText.value = error instanceof ApiError ? error.message : "加载日志失败";
-    loginLogs.value = [];
-    operationLogs.value = [];
+    logs.value = [];
+    logPagination.value = { page: 1, pageSize: logPageSize.value, total: 0, totalPages: 1 };
   } finally {
     if (requestToken === logsRequestToken) {
       loading.value = false;
@@ -303,14 +269,14 @@ async function loadLogs(): Promise<void> {
 
 function resetFilters(): void {
   const previousSignature = filterSignature.value;
-  loginFilters.actorType = "";
-  loginFilters.status = "";
-  loginFilters.q = "";
-  operationFilters.actorType = "";
-  operationFilters.method = "";
-  operationFilters.q = "";
+  filters.logType = "";
+  filters.actorType = "";
+  filters.result = "";
+  filters.q = "";
+  auditIpQuery.value = "";
   sharedDateFrom.value = "";
   sharedDateTo.value = "";
+  logPage.value = 1;
   if (filterSignature.value === previousSignature) {
     void loadLogs();
   }
@@ -322,8 +288,25 @@ function scheduleFilterLoad(): void {
   }
   filterTimer = window.setTimeout(() => {
     filterTimer = undefined;
+    logPage.value = 1;
     void loadLogs();
   }, 120);
+}
+
+function updateLogPageSize(value: number): void {
+  logPageSize.value = value;
+  logPage.value = 1;
+  void loadLogs();
+}
+
+function goPrevLogPage(): void {
+  logPage.value = Math.max(1, logPage.value - 1);
+  void loadLogs();
+}
+
+function goNextLogPage(): void {
+  logPage.value = Math.min(logTotalPages.value, logPage.value + 1);
+  void loadLogs();
 }
 
 function isAuditDateInput(value: string): boolean {
@@ -360,33 +343,19 @@ async function confirmClearLogs(): Promise<void> {
   }
 }
 
-function exportLoginLogs(): void {
+function exportAuditLogs(): void {
   exportRowsToSpreadsheet({
-    fileName: "登录日志.xls",
-    sheetName: "登录日志",
-    rows: loginLogs.value,
+    fileName: "日志审计.xls",
+    sheetName: "日志审计",
+    rows: logs.value,
     columns: [
       { header: "时间", value: (row) => formatAuditTime(row.occurredAt) },
-      { header: "账号", value: (row) => row.username || row.actorName || "-" },
+      { header: "类型", value: (row) => auditLogTypeLabel(row.logType) },
+      { header: "账号", value: (row) => row.account || row.actorName || "-" },
       { header: "身份", value: (row) => actorTypeLabel(row.actorType) },
-      { header: "结果", value: (row) => loginStatusLabel(row.status) },
-      { header: "地址", value: (row) => row.ipAddress || "-" },
-      { header: "说明", value: (row) => row.message || "-" },
-    ],
-  });
-}
-
-function exportOperationLogs(): void {
-  exportRowsToSpreadsheet({
-    fileName: "操作日志.xls",
-    sheetName: "操作日志",
-    rows: operationLogs.value,
-    columns: [
-      { header: "时间", value: (row) => formatAuditTime(row.occurredAt) },
-      { header: "账号", value: (row) => row.actorName || actorTypeLabel(row.actorType) },
-      { header: "身份", value: (row) => actorTypeLabel(row.actorType) },
-      { header: "操作", value: (row) => row.summary },
-      { header: "结果", value: (row) => operationStatusLabel(row.statusCode) },
+      { header: "说明", value: (row) => row.action || "-" },
+      { header: "IP 地址", value: (row) => row.ipAddress || "-" },
+      { header: "结果", value: (row) => row.result || "-" },
     ],
   });
 }
@@ -404,10 +373,6 @@ watch(filterSignature, () => {
 .audit-logs-page {
   display: grid;
   gap: 10px;
-}
-
-.audit-logs-page__panel {
-  overflow-x: auto;
 }
 
 .audit-logs-page__filters {
@@ -436,6 +401,7 @@ watch(filterSignature, () => {
   display: flex;
   gap: 6px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .audit-logs-page__head {
@@ -451,7 +417,31 @@ watch(filterSignature, () => {
   font-size: 1rem;
 }
 
+.audit-logs-page__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.audit-logs-page__table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 .audit-logs-page__table {
-  min-width: 620px;
+  min-width: 720px;
+}
+
+@media (max-width: 640px) {
+  .audit-logs-page__head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .audit-logs-page__head-actions,
+  .audit-logs-page__tabs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  }
 }
 </style>

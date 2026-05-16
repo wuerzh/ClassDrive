@@ -568,13 +568,13 @@
         />
     </section>
 
-    <div v-if="assignment && assignmentMissingStatsOpen" class="copy-dialog-backdrop">
+    <div v-if="assignment && assignmentMissingStatsOpen" class="copy-dialog-backdrop" @click.self="closeAssignmentMissingStatsDialog">
       <section class="copy-dialog assignment-missing-dialog" data-testid="assignment-detail-missing-dialog">
         <div class="copy-dialog__header">
           <div>
             <h3 class="copy-dialog__title">{{ `${assignment.title} · 未交名单` }}</h3>
           </div>
-          <button class="button button--ghost" type="button" data-testid="assignment-detail-missing-close" @click="assignmentMissingStatsOpen = false">
+          <button class="button button--ghost" type="button" data-testid="assignment-detail-missing-close" @click="closeAssignmentMissingStatsDialog">
             关闭
           </button>
         </div>
@@ -1681,6 +1681,10 @@ async function openAssignmentMissingStatsDialog() {
   assignmentMissingStatsOpen.value = true;
   assignmentMissingStatsPage.value = 1;
   await loadAssignmentMissingStats();
+}
+
+function closeAssignmentMissingStatsDialog() {
+  assignmentMissingStatsOpen.value = false;
 }
 
 async function loadAssignmentMissingStats() {

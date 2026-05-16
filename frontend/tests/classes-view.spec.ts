@@ -55,6 +55,7 @@ describe("ClassesView", () => {
     expect(wrapper.find('[data-testid="class-row-1"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="class-row-status-1"]').text()).toContain("未生成");
     expect(wrapper.find('[data-testid="class-row-actions-1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="class-students-1"]').exists()).toBe(true);
     expect(wrapper.get('[data-testid="class-registration-toggle-1"]').classes()).toContain("button--secondary");
     expect(wrapper.find('[data-testid="classes-quick-create"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="class-create-open"]').exists()).toBe(true);
@@ -280,8 +281,92 @@ describe("ClassesView", () => {
 
     expect(wrapper.find('[data-testid="classes-table"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="class-registration-toggle-1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="class-students-1"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="class-edit-1"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="class-delete-1"]').exists()).toBe(true);
+  });
+
+  it("opens a class-scoped student management drawer from the actions column", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          classes: [
+            { id: 1, name: "一年级一班", joinCode: "", joinCodeStatus: "inactive", joinCodeHint: "", registrationEnabled: false },
+            { id: 2, name: "24家具1班", joinCode: "4721", joinCodeStatus: "active", joinCodeHint: "4721", registrationEnabled: true },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          students: [
+            { id: 21, classId: 2, studentNo: "20240001", displayName: "李小红", activatedAt: "" },
+          ],
+          pagination: {
+            page: 1,
+            pageSize: 30,
+            total: 1,
+            totalPages: 1,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          students: [
+            { id: 22, classId: 2, studentNo: "20240002", displayName: "王小兰", activatedAt: "2026-05-01T08:00:00Z" },
+          ],
+          pagination: {
+            page: 1,
+            pageSize: 30,
+            total: 1,
+            totalPages: 1,
+          },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/classes", component: ClassesView },
+        { path: "/files/classes/:classId", component: { template: "<div />" } },
+        { path: "/assignments/classes/:classId", component: { template: "<div />" } },
+        { path: "/students", redirect: "/classes" },
+      ],
+    });
+    await router.push("/classes");
+    await router.isReady();
+
+    const wrapper = mount(ClassesView, {
+      global: {
+        plugins: [createPinia(), router],
+      },
+    });
+
+    await flushPromises();
+    await wrapper.get('[data-testid="class-students-2"]').trigger("click");
+    await flushPromises();
+
+    const drawer = wrapper.get('[data-testid="class-students-drawer"]');
+    expect(drawer.text()).toContain("24家具1班");
+    expect(drawer.text()).toContain("开放注册");
+    expect(drawer.find('[data-testid="students-class-select"]').exists()).toBe(false);
+    expect(drawer.get('[data-testid="students-table"]').text()).toContain("李小红");
+    expect(fetchMock).toHaveBeenCalledWith("/api/students?classId=2", expect.any(Object));
+
+    await drawer.get('[data-testid="student-registration-filter"]').setValue("registered");
+    await flushPromises();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/students?classId=2&registration=registered", expect.any(Object));
+    expect(drawer.get('[data-testid="students-table"]').text()).toContain("王小兰");
+
+    await drawer.get('[data-testid="class-students-drawer-close"]').trigger("click");
+    expect(wrapper.find('[data-testid="class-students-drawer"]').exists()).toBe(false);
   });
 
   it("sorts classes from table headers instead of a standalone dropdown", async () => {

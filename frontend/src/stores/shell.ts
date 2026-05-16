@@ -13,7 +13,6 @@ const defaultShellItems: ShellItem[] = [
   { key: "public", label: "公共资料", href: "/files/public", placeholder: false },
   { key: "classes-files", label: "班级资料", href: "/files/classes/1", placeholder: false },
   { key: "classes", label: "班级管理", href: "/classes", placeholder: false },
-  { key: "students", label: "学生管理", href: "/students", placeholder: false },
   { key: "assignments", label: "作业管理", href: "/assignments", placeholder: false },
   { key: "settings", label: "设置", href: "/settings", placeholder: false },
 ];
@@ -46,7 +45,6 @@ const itemGroupByKey: Record<string, ShellNavGroup["key"]> = {
   public: "resources",
   "classes-files": "resources",
   classes: "workflow",
-  students: "workflow",
   assignments: "workflow",
   settings: "account",
 };
@@ -56,9 +54,8 @@ const itemOrderByKey: Record<string, number> = {
   public: 20,
   "classes-files": 30,
   classes: 40,
-  students: 50,
-  assignments: 60,
-  settings: 70,
+  assignments: 50,
+  settings: 60,
 };
 
 const canonicalLabelByKey: Record<string, string> = {
@@ -66,16 +63,19 @@ const canonicalLabelByKey: Record<string, string> = {
   public: "公共资料",
   "classes-files": "班级资料",
   classes: "班级管理",
-  students: "学生管理",
   assignments: "作业管理",
   settings: "设置",
 };
 
+const hiddenShellItemKeys = new Set(["students"]);
+
 function normalizeShellItems(items: ShellItem[]): ShellItem[] {
-  return items.map((item) => ({
-    ...item,
-    label: canonicalLabelByKey[item.key] ?? item.label,
-  }));
+  return items
+    .filter((item) => !hiddenShellItemKeys.has(item.key))
+    .map((item) => ({
+      ...item,
+      label: canonicalLabelByKey[item.key] ?? item.label,
+    }));
 }
 
 function buildNavGroups(items: ShellItem[]): ShellNavGroup[] {
