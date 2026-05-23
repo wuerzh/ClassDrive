@@ -167,8 +167,18 @@ async function teacherRequest(page, url, init = {}) {
   }, { requestUrl: url, requestInit: init });
 }
 
+async function downloadWithSession(page, url) {
+  await page.evaluate(async ({ requestUrl }) => {
+    const response = await fetch(requestUrl, { credentials: "same-origin" });
+    if (!response.ok) {
+      throw new Error(`${requestUrl} -> ${response.status}: ${await response.text()}`);
+    }
+    await response.arrayBuffer();
+  }, { requestUrl: url });
+}
+
 async function teacherUploadAssignmentAttachments(page, classId, assignmentId) {
-  await page.evaluate(async ({ targetClassId, targetAssignmentId }) => {
+  return page.evaluate(async ({ targetClassId, targetAssignmentId }) => {
     const formData = new FormData();
     formData.append("files", new File(["网页作品需包含首页、样式文件和说明文档。"], "作业要求.txt", { type: "text/plain" }));
     formData.append("files", new File(["评分：结构 40%，视觉 30%，说明 30%。"], "评分标准.txt", { type: "text/plain" }));
@@ -180,7 +190,36 @@ async function teacherUploadAssignmentAttachments(page, classId, assignmentId) {
     if (!response.ok) {
       throw new Error(await response.text());
     }
+    return response.json();
   }, { targetClassId: classId, targetAssignmentId: assignmentId });
+}
+
+async function createAuditMaterialFiles(page, classId) {
+  const publicMaterial = await teacherRequest(page, "/api/files/file", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      space: "public",
+      parentPath: "/",
+      name: "课堂资料下载.txt",
+      content: "用于 README 审计截图的公共资料下载记录。",
+    }),
+  });
+  const classMaterial = await teacherRequest(page, "/api/files/file", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      space: "class",
+      classId,
+      parentPath: "/",
+      name: "班级练习素材.txt",
+      content: "用于 README 审计截图的班级资料下载记录。",
+    }),
+  });
+  return {
+    publicMaterial: publicMaterial.item,
+    classMaterial: classMaterial.item,
+  };
 }
 
 async function seedDemoData(page) {
@@ -249,7 +288,7 @@ async function seedDemoData(page) {
       minFileCount: 3,
     }),
   });
-  await teacherUploadAssignmentAttachments(page, classItem.id, mainAssignment.id);
+  const mainAttachments = await teacherUploadAssignmentAttachments(page, classItem.id, mainAssignment.id);
   return {
     classItem,
     joinCode: joinCode.joinCode,
@@ -258,6 +297,9 @@ async function seedDemoData(page) {
       archive: archiveAssignment,
       image: imageAssignment,
       main: mainAssignment,
+    },
+    assignmentAttachments: {
+      main: mainAttachments.items,
     },
   };
 }
@@ -273,7 +315,7 @@ async function activateStudent(page, baseUrl, joinCode, studentNo, password) {
 }
 
 async function submitStudentFiles(page, assignmentId, rootName, label, fileCount = 3) {
-  await page.evaluate(async ({ targetAssignmentId, targetRootName, targetLabel, targetFileCount }) => {
+  return page.evaluate(async ({ targetAssignmentId, targetRootName, targetLabel, targetFileCount }) => {
     const files = [
       { name: "首页说明.txt", relativePath: `${targetRootName}/首页说明.txt`, content: `${targetLabel} 首页结构说明`, type: "text/plain" },
       { name: "样式说明.txt", relativePath: `${targetRootName}/样式说明.txt`, content: `${targetLabel} 配色与排版说明`, type: "text/plain" },
@@ -292,14 +334,40 @@ async function submitStudentFiles(page, assignmentId, rootName, label, fileCount
     if (!response.ok) {
       throw new Error(await response.text());
     }
+    return response.json();
   }, { targetAssignmentId: assignmentId, targetRootName: rootName, targetLabel: label, targetFileCount: fileCount });
 }
 
 async function prepareStudent(browser, baseUrl, demo, student, password, rootName, fileCount = 3) {
   const { context, page } = await newPage(browser, baseUrl);
   await activateStudent(page, baseUrl, demo.joinCode, student.studentNo, password);
-  await submitStudentFiles(page, demo.assignments.main.id, rootName, student.displayName, fileCount);
-  return { context, page };
+  const submission = await submitStudentFiles(page, demo.assignments.main.id, rootName, student.displayName, fileCount);
+  return { context, page, submission };
+}
+
+async function createAuditDownloadLogs(teacherPage, studentPage, demo, studentSubmission) {
+  const materialFiles = await createAuditMaterialFiles(teacherPage, demo.classItem.id);
+  await downloadWithSession(studentPage, `/api/student/files/${materialFiles.publicMaterial.id}/download`);
+  await downloadWithSession(studentPage, `/api/student/files/${materialFiles.classMaterial.id}/download`);
+
+  const firstAttachment = demo.assignmentAttachments.main[0];
+  if (firstAttachment) {
+    await downloadWithSession(studentPage, `/api/student/assignments/${demo.assignments.main.id}/attachments/${firstAttachment.id}/download`);
+  }
+
+  const firstStudentFile = studentSubmission.items[0];
+  if (firstStudentFile?.downloadUrl) {
+    await downloadWithSession(studentPage, firstStudentFile.downloadUrl);
+  }
+
+  const submissions = await teacherRequest(teacherPage, `/api/assignments/${demo.assignments.main.id}/submissions?classId=${demo.classItem.id}`);
+  const teacherVisibleFile = submissions.submissions
+    .flatMap((submission) => submission.items)
+    .find((item) => item.downloadUrl);
+  if (teacherVisibleFile) {
+    await downloadWithSession(teacherPage, teacherVisibleFile.downloadUrl);
+  }
+  await downloadWithSession(teacherPage, `/api/assignments/submissions/archive?classId=${demo.classItem.id}&assignmentIds=${demo.assignments.main.id}`);
 }
 
 async function selectPendingStudentDirectoryFiles(page) {
@@ -421,6 +489,7 @@ async function main() {
     const thirdStudent = await prepareStudent(browser, server.baseUrl, demo, demo.students[2], "student789", "网页作品-陈一");
     contexts.push(thirdStudent.context);
 
+    await createAuditDownloadLogs(teacher.page, firstStudent.page, demo, firstStudent.submission);
     await captureTeacherPages(teacher.page, server.baseUrl, demo);
     await captureStudentPages(firstStudent.page, server.baseUrl, demo);
   } finally {

@@ -33,7 +33,7 @@
             target="_blank"
             rel="noopener noreferrer"
             data-testid="app-author-link"
-          >wuerzh</a> | Ver: 1.3</span>
+          >wuerzh</a> | Ver: 1.4</span>
         <span>WX/QQ: 709868663</span>
       </footer>
     </aside>

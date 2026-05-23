@@ -18,13 +18,24 @@ describe("AuditLogsView", () => {
       json: async () => ({
         logs: [
           {
+            id: 9,
+            logType: "operation",
+            occurredAt: "2026-05-06T08:34:00Z",
+            actorType: "student",
+            account: "张小明",
+            actorName: "张小明",
+            action: "学生下载作业附件：作业《附件辨识作业》/作业要求.pdf",
+            result: "成功",
+            ipAddress: "10.0.0.9",
+          },
+          {
             id: 8,
             logType: "operation",
             occurredAt: "2026-05-06T08:32:00Z",
             actorType: "teacher",
             account: "示例老师",
             actorName: "示例老师",
-            action: "创建班级：日志测试班",
+            action: "老师下载学生提交文件：作业《可疑链路作业》/张小明/答案.txt",
             result: "成功",
             ipAddress: "10.0.0.8",
           },
@@ -43,7 +54,7 @@ describe("AuditLogsView", () => {
         pagination: {
           page: 1,
           pageSize: 8,
-          total: 2,
+          total: 3,
           totalPages: 1,
         },
       }),
@@ -60,14 +71,30 @@ describe("AuditLogsView", () => {
     expect(wrapper.find('[data-testid="audit-logs-tab-login"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="audit-logs-tab-operation"]').exists()).toBe(false);
     expect(wrapper.get('[data-testid="audit-logs-panel"]').text()).toContain("最近日志");
-    expect(wrapper.get('[data-testid="audit-logs-table"]').text()).toContain("teacher");
+    expect(wrapper.get('[data-testid="audit-logs-table"]').text()).toContain("示例老师");
+    expect(wrapper.get('[data-testid="audit-logs-table"]').text()).not.toContain("teacher");
     expect(wrapper.get('[data-testid="audit-logs-table"]').text()).toContain("登录成功");
-    expect(wrapper.get('[data-testid="audit-logs-table"]').text()).toContain("创建班级：日志测试班");
+    expect(wrapper.get('[data-testid="audit-logs-table"]').text()).toContain("学生下载作业附件：作业《附件辨识作业》/作业要求.pdf");
+    expect(wrapper.get('[data-testid="audit-log-action-badge-operation-9"]').text()).toBe("作业附件");
+    expect(wrapper.get('[data-testid="audit-log-action-badge-operation-9"]').classes()).toEqual(
+      expect.arrayContaining(["status-pill", "status-pill--neutral"]),
+    );
+    expect(wrapper.get('[data-testid="audit-logs-table"]').text()).toContain("老师下载学生提交文件：作业《可疑链路作业》/张小明/答案.txt");
+    expect(wrapper.get('[data-testid="audit-log-action-badge-operation-8"]').text()).toBe("提交文件");
+    expect(wrapper.get('[data-testid="audit-log-action-badge-operation-8"]').classes()).toEqual(
+      expect.arrayContaining(["status-pill", "status-pill--warning"]),
+    );
     expect(wrapper.get('[data-testid="audit-logs-table"]').text()).toContain("10.0.0.8");
     expect(wrapper.get('[data-testid="audit-logs-table"]').text()).toContain("登录");
     expect(wrapper.get('[data-testid="audit-logs-table"]').text()).toContain("操作");
     expect(wrapper.get('[data-testid="audit-logs-table"]').text()).toContain("成功");
-    expect(wrapper.get('[data-testid="audit-log-pagination-summary"]').text()).toContain("第 1 / 1 页 · 共 2 条");
+    expect(wrapper.get('[data-testid="audit-log-type-badge-login-2"]').classes()).toEqual(
+      expect.arrayContaining(["status-pill", "status-pill--accent"]),
+    );
+    expect(wrapper.get('[data-testid="audit-log-type-badge-operation-8"]').classes()).toEqual(
+      expect.arrayContaining(["status-pill", "status-pill--success"]),
+    );
+    expect(wrapper.get('[data-testid="audit-log-pagination-summary"]').text()).toContain("第 1 / 1 页 · 共 3 条");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith("/api/audit/logs?page=1&pageSize=8", expect.objectContaining({ credentials: "same-origin" }));
     const logTypeOptions = wrapper.findAll('[data-testid="audit-log-type"] option').map((option) => option.text());
@@ -308,7 +335,8 @@ describe("AuditLogsView", () => {
     });
     await flushPromises();
 
-    expect(wrapper.get('[data-testid="audit-logs-table"]').text()).toContain("login-1");
+    expect(wrapper.get('[data-testid="audit-logs-table"]').text()).toContain("示例老师");
+    expect(wrapper.get('[data-testid="audit-logs-table"]').text()).toContain("登录 1");
     expect(wrapper.get('[data-testid="audit-logs-table"]').text()).not.toContain("操作 9");
     expect(wrapper.get('[data-testid="audit-log-pagination-summary"]').text()).toContain("第 1 / 2 页 · 共 9 条");
 

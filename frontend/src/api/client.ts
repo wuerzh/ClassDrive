@@ -57,9 +57,11 @@ export interface OperationLogItem {
   summary: string;
 }
 
+export type AuditLogType = "login" | "operation" | (string & {});
+
 export interface AuditLogItem {
   id: number;
-  logType: "login" | "operation";
+  logType: AuditLogType;
   occurredAt: string;
   actorType: "teacher" | "student";
   account: string;
@@ -70,7 +72,7 @@ export interface AuditLogItem {
 }
 
 export interface AuditLogFilters {
-  logType?: "" | AuditLogItem["logType"];
+  logType?: "" | "login" | "operation";
   actorType?: "" | AuditLogItem["actorType"];
   result?: "" | "success" | "failure";
   q?: string;

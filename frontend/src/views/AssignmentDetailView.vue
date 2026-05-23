@@ -169,6 +169,7 @@
                 :total-pages="submissionTotalPages"
                 test-id-prefix="assignment-submission"
                 @update:page-size="updateSubmissionPageSize"
+                @go="goSubmissionPage"
                 @prev="goPrevSubmissionPage"
                 @next="goNextSubmissionPage"
               />
@@ -605,6 +606,7 @@
             :total-pages="assignmentMissingStatsTotalPages"
             test-id-prefix="assignment-detail-missing"
             @update:page-size="updateAssignmentMissingStatsPageSize"
+            @go="goAssignmentMissingStatsPage"
             @prev="goPrevAssignmentMissingStatsPage"
             @next="goNextAssignmentMissingStatsPage"
           />
@@ -1658,6 +1660,14 @@ async function goNextSubmissionPage() {
   await replaceSubmissionRoute({ page: submissionPage.value + 1 });
 }
 
+async function goSubmissionPage(page: number): Promise<void> {
+  const nextPage = Math.min(Math.max(1, Math.trunc(page)), submissionTotalPages.value);
+  if (nextPage === submissionPage.value) {
+    return;
+  }
+  await replaceSubmissionRoute({ page: nextPage });
+}
+
 function openAttachmentUpload() {
   attachmentInput.value?.click();
 }
@@ -1751,6 +1761,14 @@ function goNextAssignmentMissingStatsPage() {
     return;
   }
   assignmentMissingStatsPage.value += 1;
+}
+
+function goAssignmentMissingStatsPage(page: number): void {
+  const nextPage = Math.min(Math.max(1, Math.trunc(page)), assignmentMissingStatsTotalPages.value);
+  if (nextPage === assignmentMissingStatsPage.value) {
+    return;
+  }
+  assignmentMissingStatsPage.value = nextPage;
 }
 
 function exportAssignmentMissingStats() {

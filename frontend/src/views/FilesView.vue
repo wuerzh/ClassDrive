@@ -170,6 +170,7 @@
       :total-pages="totalFilePages"
       test-id-prefix="files"
       @update:page-size="updateFilePageSize"
+      @go="goFilePage"
       @prev="goPrevFilePage"
       @next="goNextFilePage"
     />
@@ -1372,6 +1373,14 @@ async function goNextFilePage() {
     return;
   }
   await replaceFilesRoute({ page: filePage.value + 1 });
+}
+
+async function goFilePage(page: number): Promise<void> {
+  const nextPage = Math.min(Math.max(1, Math.trunc(page)), totalFilePages.value);
+  if (nextPage === filePage.value) {
+    return;
+  }
+  await replaceFilesRoute({ page: nextPage });
 }
 
 async function ensureClassesLoaded() {

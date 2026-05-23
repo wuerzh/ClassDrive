@@ -28,6 +28,7 @@
         :total-pages="totalClassPages"
         test-id-prefix="classes"
         @update:page-size="updateClassPageSize"
+        @go="goClassPage"
         @prev="goPrevClassPage"
         @next="goNextClassPage"
       />
@@ -344,6 +345,14 @@ async function goNextClassPage() {
     return;
   }
   await replaceClassesRoute({ page: classPage.value + 1 });
+}
+
+async function goClassPage(page: number): Promise<void> {
+  const nextPage = Math.min(Math.max(1, Math.trunc(page)), totalClassPages.value);
+  if (nextPage === classPage.value) {
+    return;
+  }
+  await replaceClassesRoute({ page: nextPage });
 }
 
 async function refreshClassSources() {

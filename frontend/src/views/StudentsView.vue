@@ -48,6 +48,7 @@
           :total-pages="totalStudentPages"
           test-id-prefix="student"
           @update:page-size="updateStudentPageSize"
+          @go="goStudentPage"
           @prev="goPrevStudentPage"
           @next="goNextStudentPage"
         />
@@ -501,6 +502,14 @@ async function goNextStudentPage() {
     return;
   }
   await replaceStudentsRoute({ page: studentPage.value + 1 });
+}
+
+async function goStudentPage(page: number): Promise<void> {
+  const nextPage = Math.min(Math.max(1, Math.trunc(page)), totalStudentPages.value);
+  if (nextPage === studentPage.value) {
+    return;
+  }
+  await replaceStudentsRoute({ page: nextPage });
 }
 
 async function createStudent() {

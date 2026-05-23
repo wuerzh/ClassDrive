@@ -677,8 +677,153 @@ func TestTeacherOperationLogsRecordMutatingRequests(t *testing.T) {
 	if latest.Method != http.MethodGet || latest.Path != "/api/files/"+itoa(downloadEntry.ID)+"/download" || latest.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected operation log %#v", latest)
 	}
-	if latest.ActorName != "示例老师" || latest.Summary != "下载文件" || latest.IPAddress == "" {
+	if latest.ActorName != "示例老师" || latest.Summary != "老师下载资料：日志下载.txt" || latest.IPAddress == "" {
 		t.Fatalf("unexpected operation actor/summary %#v", latest)
+	}
+}
+
+func TestOperationLogsDescribeAssignmentSubmissionActions(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	teacherCookie := loginAndGetCookie(t, app)
+
+	prepareStudentAuthFixture(t, app, "ABCD1234", "20260001", "张小明")
+	assignment, err := app.createAssignment(createAssignmentRequest{
+		ClassID:     1,
+		Title:       "可疑链路作业",
+		Description: "用于审计下载和提交行为",
+		DueAt:       time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339),
+		Status:      "published",
+	})
+	if err != nil {
+		t.Fatalf("create assignment: %v", err)
+	}
+	studentCookie := activateAndLoginStudent(t, app, "ABCD1234", "20260001", "student123")
+
+	body, contentType := multipartFileBody(t, map[string]string{}, "files", "答案.txt", []byte("student answer"))
+	submitRecorder := httptest.NewRecorder()
+	submitRequest := httptest.NewRequest(http.MethodPost, "/api/student/assignments/"+itoa(assignment.ID)+"/submission", body)
+	submitRequest.Header.Set("Content-Type", contentType)
+	submitRequest.AddCookie(studentCookie)
+	app.ServeHTTP(submitRecorder, submitRequest)
+	if submitRecorder.Code != http.StatusOK {
+		t.Fatalf("expected student submission 200, got %d: %s", submitRecorder.Code, submitRecorder.Body.String())
+	}
+	var submitPayload studentSubmissionResponse
+	decodeJSON(t, submitRecorder.Body, &submitPayload)
+	if len(submitPayload.Items) != 1 {
+		t.Fatalf("expected one submitted file, got %#v", submitPayload)
+	}
+
+	studentDownloadRecorder := httptest.NewRecorder()
+	studentDownloadRequest := httptest.NewRequest(http.MethodGet, submitPayload.Items[0].DownloadURL, nil)
+	studentDownloadRequest.AddCookie(studentCookie)
+	app.ServeHTTP(studentDownloadRecorder, studentDownloadRequest)
+	if studentDownloadRecorder.Code != http.StatusOK {
+		t.Fatalf("expected student submission file download 200, got %d: %s", studentDownloadRecorder.Code, studentDownloadRecorder.Body.String())
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/assignments/"+itoa(assignment.ID)+"/submissions?classId=1", nil)
+	listRequest.AddCookie(teacherCookie)
+	app.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected teacher submissions list 200, got %d: %s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var submissions teacherAssignmentSubmissionsResponse
+	decodeJSON(t, listRecorder.Body, &submissions)
+	if len(submissions.Submissions) != 1 || len(submissions.Submissions[0].Items) != 1 {
+		t.Fatalf("expected one teacher-visible submission file, got %#v", submissions)
+	}
+
+	teacherDownloadRecorder := httptest.NewRecorder()
+	teacherDownloadRequest := httptest.NewRequest(http.MethodGet, submissions.Submissions[0].Items[0].DownloadURL, nil)
+	teacherDownloadRequest.AddCookie(teacherCookie)
+	app.ServeHTTP(teacherDownloadRecorder, teacherDownloadRequest)
+	if teacherDownloadRecorder.Code != http.StatusOK {
+		t.Fatalf("expected teacher submission file download 200, got %d: %s", teacherDownloadRecorder.Code, teacherDownloadRecorder.Body.String())
+	}
+
+	logsRecorder := httptest.NewRecorder()
+	logsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/operation-logs", nil)
+	logsRequest.AddCookie(teacherCookie)
+	app.ServeHTTP(logsRecorder, logsRequest)
+	if logsRecorder.Code != http.StatusOK {
+		t.Fatalf("expected operation logs 200, got %d: %s", logsRecorder.Code, logsRecorder.Body.String())
+	}
+	var logs operationLogsResponse
+	decodeJSON(t, logsRecorder.Body, &logs)
+	summaryByPath := make(map[string]string, len(logs.Logs))
+	for _, item := range logs.Logs {
+		summaryByPath[item.Method+" "+item.Path] = item.Summary
+	}
+
+	expectedSubmitPath := "POST /api/student/assignments/" + itoa(assignment.ID) + "/submission"
+	expectedStudentDownloadPath := "GET /api/student/assignments/" + itoa(assignment.ID) + "/submission/files/" + itoa(submitPayload.Items[0].ID) + "/download"
+	expectedTeacherDownloadPath := "GET /api/assignments/" + itoa(assignment.ID) + "/submissions/files/" + itoa(submitPayload.Items[0].ID) + "/download"
+	expected := map[string]string{
+		expectedSubmitPath:          "学生提交作业：作业《可疑链路作业》",
+		expectedStudentDownloadPath: "学生下载本人提交文件：作业《可疑链路作业》/答案.txt",
+		expectedTeacherDownloadPath: "老师下载学生提交文件：作业《可疑链路作业》/张小明/答案.txt",
+	}
+	for path, want := range expected {
+		if got := summaryByPath[path]; got != want {
+			t.Fatalf("summary for %s = %q, want %q; logs=%#v", path, got, want, logs.Logs)
+		}
+	}
+}
+
+func TestOperationLogsDescribeStudentAssignmentAttachmentDownloads(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	teacherCookie := loginAndGetCookie(t, app)
+
+	prepareStudentAuthFixture(t, app, "ABCD1234", "20260001", "张小明")
+	assignment, err := app.createAssignment(createAssignmentRequest{
+		ClassID:     1,
+		Title:       "附件辨识作业",
+		Description: "用于审计学生下载老师布置附件",
+		DueAt:       time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339),
+		Status:      "published",
+	})
+	if err != nil {
+		t.Fatalf("create assignment: %v", err)
+	}
+	attachment, err := app.createFile("assignment", optionalInt64(1), assignmentAttachmentParentPath(assignment.ID), "作业要求.pdf", strings.NewReader("assignment attachment"))
+	if err != nil {
+		t.Fatalf("create assignment attachment: %v", err)
+	}
+	studentCookie := activateAndLoginStudent(t, app, "ABCD1234", "20260001", "student123")
+
+	downloadRecorder := httptest.NewRecorder()
+	downloadRequest := httptest.NewRequest(http.MethodGet, "/api/student/assignments/"+itoa(assignment.ID)+"/attachments/"+itoa(attachment.ID)+"/download", nil)
+	downloadRequest.AddCookie(studentCookie)
+	app.ServeHTTP(downloadRecorder, downloadRequest)
+	if downloadRecorder.Code != http.StatusOK {
+		t.Fatalf("expected student assignment attachment download 200, got %d: %s", downloadRecorder.Code, downloadRecorder.Body.String())
+	}
+
+	logsRecorder := httptest.NewRecorder()
+	logsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/operation-logs", nil)
+	logsRequest.AddCookie(teacherCookie)
+	app.ServeHTTP(logsRecorder, logsRequest)
+	if logsRecorder.Code != http.StatusOK {
+		t.Fatalf("expected operation logs 200, got %d: %s", logsRecorder.Code, logsRecorder.Body.String())
+	}
+	var logs operationLogsResponse
+	decodeJSON(t, logsRecorder.Body, &logs)
+	if len(logs.Logs) == 0 {
+		t.Fatalf("expected operation log entries")
+	}
+	latest := logs.Logs[0]
+	expectedPath := "/api/student/assignments/" + itoa(assignment.ID) + "/attachments/" + itoa(attachment.ID) + "/download"
+	if latest.Method != http.MethodGet || latest.Path != expectedPath {
+		t.Fatalf("unexpected latest operation log %#v", latest)
+	}
+	if latest.Summary != "学生下载作业附件：作业《附件辨识作业》/作业要求.pdf" {
+		t.Fatalf("unexpected attachment download summary %#v", latest)
 	}
 }
 
@@ -904,7 +1049,7 @@ values ('2026-05-14T16:11:58Z', 'student', '陈嘉瑜', 'POST', '/api/student/au
 	if logs.Logs[0].LogType != "operation" || logs.Logs[0].Action != "学生退出登录" || logs.Logs[0].Result != "成功" {
 		t.Fatalf("expected latest operation logout row first, got %#v", logs.Logs[0])
 	}
-	if logs.Logs[1].LogType != "login" || logs.Logs[1].Account != "20260001" || logs.Logs[1].Action != "学生退出登录" {
+	if logs.Logs[1].LogType != "login" || logs.Logs[1].Account != "陈嘉瑜" || logs.Logs[1].Action != "学生退出登录" {
 		t.Fatalf("expected login logout row second, got %#v", logs.Logs[1])
 	}
 	if logs.Pagination.Page != 1 || logs.Pagination.PageSize != 8 || logs.Pagination.Total != 2 || logs.Pagination.TotalPages != 1 {
@@ -1146,6 +1291,42 @@ func TestStudentLoginInvalidatesPreviousSession(t *testing.T) {
 	}
 	if strings.TrimSpace(logs.Logs[0].IPAddress) == "" {
 		t.Fatalf("expected login log ip address, got %#v", logs.Logs[0])
+	}
+}
+
+func TestStudentFailedLoginLogUsesMatchedDisplayName(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	prepareStudentAuthFixture(t, app, "ABCD1234", "20260001", "张小明")
+	_ = activateAndLoginStudent(t, app, "ABCD1234", "20260001", "student123")
+
+	failedLoginRecorder := httptest.NewRecorder()
+	failedLoginRequest := httptest.NewRequest(http.MethodPost, "/api/student/auth/login", jsonBody(t, map[string]string{
+		"studentNo": "20260001",
+		"password":  "wrong-password",
+	}))
+	failedLoginRequest.Header.Set("Content-Type", "application/json")
+	app.ServeHTTP(failedLoginRecorder, failedLoginRequest)
+	if failedLoginRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected failed student login 401, got %d: %s", failedLoginRecorder.Code, failedLoginRecorder.Body.String())
+	}
+
+	teacherCookie := loginAndGetCookie(t, app)
+	logsRecorder := httptest.NewRecorder()
+	logsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/logs?logType=login&actorType=student&result=failure", nil)
+	logsRequest.AddCookie(teacherCookie)
+	app.ServeHTTP(logsRecorder, logsRequest)
+	if logsRecorder.Code != http.StatusOK {
+		t.Fatalf("expected audit logs 200, got %d: %s", logsRecorder.Code, logsRecorder.Body.String())
+	}
+	var logs auditLogsResponse
+	decodeJSON(t, logsRecorder.Body, &logs)
+	if len(logs.Logs) == 0 {
+		t.Fatalf("expected failed student login log")
+	}
+	if logs.Logs[0].Account != "张小明" || logs.Logs[0].ActorName != "张小明" {
+		t.Fatalf("expected failed student login log to use display name, got %#v", logs.Logs[0])
 	}
 }
 

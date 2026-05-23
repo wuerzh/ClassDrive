@@ -91,6 +91,23 @@ async function activateStudentFixture(page: Page) {
   await expect(page).toHaveURL(/\/student\/assignments$/);
 }
 
+async function createAuditPaginationFixture(page: Page) {
+  for (let index = 0; index < 10; index += 1) {
+    await page.evaluate(async () => {
+      await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          username: "admin",
+          password: "wrong-password",
+        }),
+      });
+    });
+  }
+}
+
 async function expectStableScreenshot(target: Locator, name: string, masks: Locator[] = []) {
   await expect(target).toHaveScreenshot(name, {
     animations: "disabled",
@@ -121,6 +138,20 @@ test.describe("visual baseline", () => {
     await page.getByTestId("sidebar-nav").getByRole("link", { name: "设置", exact: true }).click();
     await expect(page).toHaveURL(/\/settings$/);
     await expectStableScreenshot(page.locator(".shell"), "teacher-settings-shell.png");
+  });
+
+  test("audit pagination controls stay usable on mobile width", async ({ page }) => {
+    await stabilizePage(page);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await loginAsTeacher(page);
+    await createAuditPaginationFixture(page);
+    await page.goto("/settings/logs");
+    await expect(page.getByTestId("audit-log-pagination-summary")).toContainText("第 1 / 2 页");
+    await expect(page.getByTestId("audit-log-page-first")).toBeVisible();
+    await expect(page.getByTestId("audit-log-page-last")).toBeVisible();
+    await expect(page.getByTestId("audit-log-page-number-2")).toBeVisible();
+    await expect(page.getByTestId("audit-log-page-jump-input")).toBeVisible();
+    await expectStableScreenshot(page.locator(".pagination-controls"), "mobile-audit-pagination-controls.png");
   });
 
   test("student shell page stays visually stable", async ({ page }) => {

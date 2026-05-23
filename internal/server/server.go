@@ -1074,7 +1074,8 @@ func (app *App) handleStudentLogin(writer http.ResponseWriter, request *http.Req
 
 	student, err := app.authenticateStudent(payload)
 	if err != nil {
-		app.recordLoginLog(request, "student", 0, strings.TrimSpace(payload.StudentNo), "", "failure", "学生登录失败")
+		actorID, actorName := app.studentLoginLogIdentity(payload.StudentNo)
+		app.recordLoginLog(request, "student", actorID, strings.TrimSpace(payload.StudentNo), actorName, "failure", "学生登录失败")
 		app.writeDomainError(writer, err)
 		return
 	}
@@ -7286,6 +7287,15 @@ func (app *App) authenticateStudent(payload studentLoginRequest) (*studentRecord
 	return &student, nil
 }
 
+func (app *App) studentLoginLogIdentity(studentNo string) (int64, string) {
+	students, err := app.findStudentsByNo(studentNo)
+	if err != nil || len(students) != 1 {
+		return 0, ""
+	}
+	student := students[0]
+	return student.ID, student.DisplayName
+}
+
 func (app *App) resetStudentPassword(studentID int64) (*studentPasswordResetResult, error) {
 	student, err := app.findStudentByID(studentID)
 	if err != nil {
@@ -8300,8 +8310,313 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		statusCode,
 		clientIPAddress(request),
 		request.UserAgent(),
-		operationLogSummary(request.Method, requestPath),
+		app.operationLogSummaryForRequest(request, actorType, actorID, statusCode),
 	)
+}
+
+func (app *App) operationLogSummaryForRequest(request *http.Request, actorType string, actorID int64, statusCode int) string {
+	fallback := operationLogSummary(request.Method, request.URL.Path)
+	if statusCode < http.StatusOK || statusCode >= http.StatusBadRequest {
+		return fallback
+	}
+	summary, ok := app.enrichedOperationLogSummary(request, actorType, actorID)
+	if !ok {
+		return fallback
+	}
+	return summary
+}
+
+func (app *App) enrichedOperationLogSummary(request *http.Request, actorType string, actorID int64) (string, bool) {
+	segments := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
+	if len(segments) < 2 || segments[0] != "api" {
+		return "", false
+	}
+	switch segments[1] {
+	case "files":
+		return app.materialOperationLogSummary(request.Method, segments, actorType, actorID)
+	case "student":
+		return app.studentOperationLogSummaryForRequest(request, segments, actorID)
+	case "assignments":
+		return app.assignmentOperationLogSummaryForRequest(request, segments)
+	default:
+		return "", false
+	}
+}
+
+func (app *App) materialOperationLogSummary(method string, segments []string, actorType string, actorID int64) (string, bool) {
+	if method != http.MethodGet || len(segments) != 4 {
+		return "", false
+	}
+	action := segments[3]
+	if action != "download" && action != "archive" {
+		return "", false
+	}
+	entryID, ok := positivePathID(segments, 2)
+	if !ok {
+		return "", false
+	}
+	entry, err := app.getEntryByID(entryID)
+	if err != nil {
+		return "", false
+	}
+	if actorType == "student" {
+		student, err := app.findStudentRecordByID(actorID)
+		if err != nil {
+			return "", false
+		}
+		if _, err := app.getStudentVisibleFileEntry(entryID, *student); err != nil {
+			return "", false
+		}
+		prefix := "学生下载资料"
+		if action == "archive" {
+			prefix = "学生下载资料压缩包"
+		}
+		return prefix + "：" + materialScopeLabel(entry) + "/" + auditEntryName(entry), true
+	}
+	prefix := "老师下载资料"
+	if action == "archive" {
+		prefix = "老师下载资料压缩包"
+	}
+	return prefix + "：" + auditEntryName(entry), true
+}
+
+func (app *App) studentOperationLogSummaryForRequest(request *http.Request, segments []string, actorID int64) (string, bool) {
+	if len(segments) >= 5 && segments[2] == "assignments" && segments[4] == "submission" {
+		return app.studentAssignmentSubmissionOperationLogSummary(request.Method, segments, actorID)
+	}
+	if len(segments) == 7 && segments[2] == "assignments" && segments[4] == "attachments" && segments[6] == "download" {
+		return app.studentAssignmentAttachmentOperationLogSummary(request.Method, segments, actorID)
+	}
+	if len(segments) == 5 && segments[2] == "files" {
+		studentFileSegments := []string{"api", "files", segments[3], segments[4]}
+		return app.materialOperationLogSummary(request.Method, studentFileSegments, "student", actorID)
+	}
+	return "", false
+}
+
+func (app *App) studentAssignmentAttachmentOperationLogSummary(method string, segments []string, actorID int64) (string, bool) {
+	if method != http.MethodGet {
+		return "", false
+	}
+	assignmentID, ok := positivePathID(segments, 3)
+	if !ok {
+		return "", false
+	}
+	fileID, ok := positivePathID(segments, 5)
+	if !ok {
+		return "", false
+	}
+	student, err := app.findStudentRecordByID(actorID)
+	if err != nil {
+		return "", false
+	}
+	assignment, err := app.findVisibleStudentAssignmentByID(assignmentID, student.ClassID)
+	if err != nil {
+		return "", false
+	}
+	entry, err := app.findStudentAssignmentAttachmentByID(assignmentID, *student, fileID)
+	if err != nil {
+		return "", false
+	}
+	return "学生下载作业附件：" + auditAssignmentLabel(assignment.Title) + "/" + auditEntryName(entry), true
+}
+
+func (app *App) studentAssignmentSubmissionOperationLogSummary(method string, segments []string, actorID int64) (string, bool) {
+	assignmentID, ok := positivePathID(segments, 3)
+	if !ok {
+		return "", false
+	}
+	student, err := app.findStudentRecordByID(actorID)
+	if err != nil {
+		return "", false
+	}
+	assignment, err := app.findVisibleStudentAssignmentByID(assignmentID, student.ClassID)
+	if err != nil {
+		return "", false
+	}
+	assignmentLabel := auditAssignmentLabel(assignment.Title)
+	if len(segments) == 5 && segments[4] == "submission" && method == http.MethodPost {
+		return "学生提交作业：" + assignmentLabel, true
+	}
+	if len(segments) == 8 && segments[4] == "submission" && segments[5] == "files" && segments[7] == "download" && method == http.MethodGet {
+		fileID, ok := positivePathID(segments, 6)
+		if !ok {
+			return "", false
+		}
+		entry, err := app.findStudentSubmissionFileByID(assignmentID, *student, fileID)
+		if err != nil {
+			return "", false
+		}
+		return "学生下载本人提交文件：" + assignmentLabel + "/" + auditEntryName(entry), true
+	}
+	if len(segments) == 7 && segments[4] == "submission" && segments[5] == "files" && method == http.MethodDelete {
+		fileID, ok := positivePathID(segments, 6)
+		if !ok {
+			return "", false
+		}
+		entry, err := app.findStudentSubmissionFileByID(assignmentID, *student, fileID)
+		if err != nil {
+			return "", false
+		}
+		return "学生删除提交文件：" + assignmentLabel + "/" + auditEntryName(entry), true
+	}
+	return "", false
+}
+
+func (app *App) assignmentOperationLogSummaryForRequest(request *http.Request, segments []string) (string, bool) {
+	if len(segments) == 4 && segments[2] == "submissions" && segments[3] == "archive" && request.Method == http.MethodGet {
+		return app.assignmentSubmissionsArchiveOperationLogSummary(request.URL.Query())
+	}
+	assignmentID, ok := positivePathID(segments, 2)
+	if !ok {
+		return "", false
+	}
+	classID, err := parseOptionalInt64(request.URL.Query().Get("classId"))
+	if err != nil || classID == nil {
+		return "", false
+	}
+	assignment, err := app.findAssignmentByID(assignmentID, *classID)
+	if err != nil {
+		return "", false
+	}
+	assignmentLabel := auditAssignmentLabel(assignment.Title)
+	if len(segments) == 6 && segments[3] == "attachments" && segments[5] == "download" && request.Method == http.MethodGet {
+		fileID, ok := positivePathID(segments, 4)
+		if !ok {
+			return "", false
+		}
+		entry, err := app.findAssignmentAttachmentByID(assignmentID, *classID, fileID)
+		if err != nil {
+			return "", false
+		}
+		return "老师下载作业附件：" + assignmentLabel + "/" + auditEntryName(entry), true
+	}
+	if len(segments) == 7 && segments[3] == "submissions" && segments[4] == "files" && segments[6] == "download" && request.Method == http.MethodGet {
+		fileID, ok := positivePathID(segments, 5)
+		if !ok {
+			return "", false
+		}
+		entry, err := app.findAssignmentSubmissionFileByID(assignmentID, *classID, fileID)
+		if err != nil {
+			return "", false
+		}
+		submissionID, ok := submissionIDFromEntryPath(entry)
+		if !ok {
+			return "", false
+		}
+		studentName, ok := app.assignmentSubmissionStudentName(assignmentID, *classID, submissionID)
+		if !ok {
+			return "", false
+		}
+		return "老师下载学生提交文件：" + assignmentLabel + "/" + studentName + "/" + auditEntryName(entry), true
+	}
+	return "", false
+}
+
+func (app *App) assignmentSubmissionsArchiveOperationLogSummary(query url.Values) (string, bool) {
+	classID, err := parseOptionalInt64(query.Get("classId"))
+	if err != nil || classID == nil {
+		return "", false
+	}
+	assignmentIDs, err := parseAssignmentArchiveIDs(query.Get("assignmentIds"))
+	if err != nil {
+		return "", false
+	}
+	if len(assignmentIDs) == 1 {
+		assignment, err := app.findAssignmentByID(assignmentIDs[0], *classID)
+		if err != nil {
+			return "", false
+		}
+		return "老师下载作业提交包：" + auditAssignmentLabel(assignment.Title), true
+	}
+	if len(assignmentIDs) > 1 {
+		return fmt.Sprintf("老师下载作业提交包：指定 %d 个作业", len(assignmentIDs)), true
+	}
+	return "老师下载作业提交包：全部作业", true
+}
+
+func (app *App) assignmentSubmissionStudentName(assignmentID, classID, submissionID int64) (string, bool) {
+	var displayName string
+	err := app.db.QueryRow(`
+select st.display_name
+from assignment_submissions s
+join students st on st.id = s.student_id
+where s.id = ? and s.assignment_id = ? and st.class_id = ?`,
+		submissionID,
+		assignmentID,
+		classID,
+	).Scan(&displayName)
+	if err != nil {
+		return "", false
+	}
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		return "未命名学生", true
+	}
+	return displayName, true
+}
+
+func (app *App) findStudentRecordByID(studentID int64) (*studentRecord, error) {
+	row := app.db.QueryRow(`
+select s.id, s.class_id, s.student_no, s.display_name, s.password_hash, s.activated_at, c.name, s.must_change_password
+from students s
+join classes c on c.id = s.class_id
+where s.id = ?`, studentID)
+	var student studentRecord
+	if err := row.Scan(
+		&student.ID,
+		&student.ClassID,
+		&student.StudentNo,
+		&student.DisplayName,
+		&student.PasswordHash,
+		&student.ActivatedAt,
+		&student.ClassName,
+		&student.MustChangePassword,
+	); err != nil {
+		return nil, err
+	}
+	return &student, nil
+}
+
+func positivePathID(segments []string, index int) (int64, bool) {
+	if index < 0 || index >= len(segments) {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(segments[index], 10, 64)
+	return id, err == nil && id > 0
+}
+
+func auditAssignmentLabel(title string) string {
+	trimmed := strings.TrimSpace(title)
+	if trimmed == "" {
+		return "作业《未命名》"
+	}
+	return "作业《" + trimmed + "》"
+}
+
+func auditEntryName(entry *fileEntry) string {
+	if entry == nil {
+		return "文件"
+	}
+	trimmed := strings.TrimSpace(entry.Name)
+	if trimmed == "" {
+		return "文件"
+	}
+	return trimmed
+}
+
+func materialScopeLabel(entry *fileEntry) string {
+	if entry == nil {
+		return "资料"
+	}
+	switch entry.Space {
+	case "public":
+		return "公共资料"
+	case "class":
+		return "班级资料"
+	default:
+		return "资料"
+	}
 }
 
 func shouldRecordOperationLog(method, requestPath string) bool {
@@ -8580,7 +8895,7 @@ func (app *App) listAuditLogsPage(filters auditLogFilters) ([]auditLogPayload, p
 		}
 		total += loginCount
 		queryParts = append(queryParts, `
-select id, 'login' as log_type, occurred_at, actor_type, username as account, actor_name, message as action, status as result, ip_address, '' as method, '' as path
+select id, 'login' as log_type, occurred_at, actor_type, case when trim(actor_name) <> '' then actor_name else username end as account, actor_name, message as action, status as result, ip_address, '' as method, '' as path
 from login_logs
 where `+loginWhere)
 		args = append(args, loginArgs...)

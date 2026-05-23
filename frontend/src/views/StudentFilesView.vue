@@ -145,6 +145,7 @@
           :total-pages="totalFilePages"
           test-id-prefix="student-files"
           @update:page-size="updateFilePageSize"
+          @go="goFilePage"
           @prev="goPrevFilePage"
           @next="goNextFilePage"
         />
@@ -649,6 +650,17 @@ async function goNextFilePage() {
   await router.replace({
     path: route.path,
     query: buildStudentFilesRouteQuery({ page: filePage.value + 1 }),
+  });
+}
+
+async function goFilePage(page: number): Promise<void> {
+  const nextPage = Math.min(Math.max(1, Math.trunc(page)), totalFilePages.value);
+  if (nextPage === filePage.value) {
+    return;
+  }
+  await router.replace({
+    path: route.path,
+    query: buildStudentFilesRouteQuery({ page: nextPage }),
   });
 }
 

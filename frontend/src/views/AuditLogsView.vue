@@ -120,10 +120,30 @@
           <tbody>
             <tr v-for="item in logs" :key="`${item.logType}-${item.id}`">
               <td>{{ formatAuditTime(item.occurredAt) }}</td>
-              <td>{{ auditLogTypeLabel(item.logType) }}</td>
-              <td>{{ item.account || item.actorName || "-" }}</td>
+              <td>
+                <span
+                  class="status-pill"
+                  :class="auditLogTypeTone(item.logType)"
+                  :data-testid="`audit-log-type-badge-${item.logType}-${item.id}`"
+                >
+                  {{ auditLogTypeLabel(item.logType) }}
+                </span>
+              </td>
+              <td>{{ auditAccountLabel(item) }}</td>
               <td>{{ actorTypeLabel(item.actorType) }}</td>
-              <td>{{ item.action || "-" }}</td>
+              <td>
+                <span class="audit-logs-page__action-cell">
+                  <span
+                    v-if="auditActionBadge(item.action)"
+                    class="status-pill audit-logs-page__action-badge"
+                    :class="auditActionBadge(item.action)?.tone"
+                    :data-testid="`audit-log-action-badge-${item.logType}-${item.id}`"
+                  >
+                    {{ auditActionBadge(item.action)?.label }}
+                  </span>
+                  <span class="audit-logs-page__action-text">{{ item.action || "-" }}</span>
+                </span>
+              </td>
               <td>{{ item.ipAddress || "-" }}</td>
               <td>{{ item.result || "-" }}</td>
             </tr>
@@ -142,6 +162,7 @@
         :total-pages="logTotalPages"
         test-id-prefix="audit-log"
         @update:page-size="updateLogPageSize"
+        @go="goLogPage"
         @prev="goPrevLogPage"
         @next="goNextLogPage"
       />
@@ -234,7 +255,55 @@ function actorTypeLabel(value: AuditLogItem["actorType"]): string {
 }
 
 function auditLogTypeLabel(value: AuditLogItem["logType"]): string {
-  return value === "login" ? "登录" : "操作";
+  if (value === "login") {
+    return "登录";
+  }
+  if (value === "operation") {
+    return "操作";
+  }
+  return "其他";
+}
+
+function auditLogTypeTone(value: AuditLogItem["logType"]): string {
+  if (value === "login") {
+    return "status-pill--accent";
+  }
+  if (value === "operation") {
+    return "status-pill--success";
+  }
+  return "status-pill--neutral";
+}
+
+type AuditActionBadge = {
+  label: string;
+  tone: string;
+};
+
+function auditActionBadge(action: string): AuditActionBadge | null {
+  const normalized = action.trim();
+  if (normalized === "") {
+    return null;
+  }
+  if (normalized.includes("下载学生提交文件") || normalized.includes("下载本人提交文件") || normalized.includes("下载提交文件")) {
+    return { label: "提交文件", tone: "status-pill--warning" };
+  }
+  if (normalized.includes("下载作业提交包")) {
+    return { label: "提交包", tone: "status-pill--warning" };
+  }
+  if (normalized.includes("下载作业附件")) {
+    return { label: "作业附件", tone: "status-pill--neutral" };
+  }
+  if (normalized.includes("提交作业")) {
+    return { label: "提交作业", tone: "status-pill--success" };
+  }
+  if (normalized.includes("下载资料") || normalized.includes("下载文件")) {
+    return { label: "资料下载", tone: "status-pill--accent" };
+  }
+  return null;
+}
+
+function auditAccountLabel(item: AuditLogItem): string {
+  return item.actorName.trim() || item.account.trim() || "-";
 }
 
 async function loadLogs(): Promise<void> {
@@ -312,6 +381,15 @@ function goNextLogPage(): void {
   void loadLogs();
 }
 
+function goLogPage(page: number): void {
+  const nextPage = Math.min(Math.max(1, Math.trunc(page)), logTotalPages.value);
+  if (nextPage === logPage.value) {
+    return;
+  }
+  logPage.value = nextPage;
+  void loadLogs();
+}
+
 function isAuditDateInput(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
 }
@@ -354,7 +432,7 @@ function exportAuditLogs(): void {
     columns: [
       { header: "时间", value: (row) => formatAuditTime(row.occurredAt) },
       { header: "类型", value: (row) => auditLogTypeLabel(row.logType) },
-      { header: "账号", value: (row) => row.account || row.actorName || "-" },
+      { header: "账号", value: (row) => auditAccountLabel(row) },
       { header: "身份", value: (row) => actorTypeLabel(row.actorType) },
       { header: "说明", value: (row) => row.action || "-" },
       { header: "IP 地址", value: (row) => row.ipAddress || "-" },
@@ -456,6 +534,23 @@ watch(filterSignature, () => {
   box-sizing: border-box;
   height: 44px;
   max-height: 44px;
+}
+
+.audit-logs-page__action-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.audit-logs-page__action-badge {
+  min-width: max-content;
+}
+
+.audit-logs-page__action-text {
+  min-width: 0;
 }
 
 @media (max-width: 640px) {

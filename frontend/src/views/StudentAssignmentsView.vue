@@ -12,6 +12,7 @@
           :total-pages="totalAssignmentPages"
           test-id-prefix="student-assignment"
           @update:page-size="updateAssignmentPageSize"
+          @go="goAssignmentPage"
           @prev="goPrevAssignmentPage"
           @next="goNextAssignmentPage"
         />
@@ -170,6 +171,14 @@ async function goNextAssignmentPage() {
     return;
   }
   await replaceAssignmentRoute({ page: assignmentPage.value + 1 });
+}
+
+async function goAssignmentPage(page: number): Promise<void> {
+  const nextPage = Math.min(Math.max(1, Math.trunc(page)), totalAssignmentPages.value);
+  if (nextPage === assignmentPage.value) {
+    return;
+  }
+  await replaceAssignmentRoute({ page: nextPage });
 }
 
 onMounted(async () => {

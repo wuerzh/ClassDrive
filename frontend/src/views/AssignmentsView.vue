@@ -46,6 +46,7 @@
         :total-pages="totalAssignmentPages"
         test-id-prefix="assignment"
         @update:page-size="updateAssignmentPageSize"
+        @go="goAssignmentPage"
         @prev="goPrevAssignmentPage"
         @next="goNextAssignmentPage"
       />
@@ -410,6 +411,7 @@
           :total-pages="missingStatsTotalPages"
           test-id-prefix="assignment-missing"
           @update:page-size="updateMissingStatsPageSize"
+          @go="goMissingStatsPage"
           @prev="goPrevMissingStatsPage"
           @next="goNextMissingStatsPage"
         />
@@ -960,6 +962,14 @@ async function goNextAssignmentPage() {
   await replaceAssignmentsRoute({ page: assignmentPage.value + 1 });
 }
 
+async function goAssignmentPage(page: number): Promise<void> {
+  const nextPage = Math.min(Math.max(1, Math.trunc(page)), totalAssignmentPages.value);
+  if (nextPage === assignmentPage.value) {
+    return;
+  }
+  await replaceAssignmentsRoute({ page: nextPage });
+}
+
 function resetCreateDialogFields() {
   assignmentTitle.value = "";
   assignmentDescription.value = "";
@@ -1075,6 +1085,14 @@ function goNextMissingStatsPage() {
     return;
   }
   missingStatsPage.value += 1;
+}
+
+function goMissingStatsPage(page: number): void {
+  const nextPage = Math.min(Math.max(1, Math.trunc(page)), missingStatsTotalPages.value);
+  if (nextPage === missingStatsPage.value) {
+    return;
+  }
+  missingStatsPage.value = nextPage;
 }
 
 function exportMissingStats() {
