@@ -220,7 +220,7 @@ func (runtime *runtimeHTTPServer) currentPort() string {
 }
 
 func startupCredentialsMessage() string {
-	return "默认管理员账号：" + server.DefaultTeacherUsername + "，默认密码：" + server.DefaultTeacherPassword + "（首次登录后请及时修改密码）"
+	return "默认管理员账号：" + server.DefaultTeacherUsername + "，默认密码：" + server.DefaultTeacherPasswordStartupText() + "（首次登录后请及时修改密码）"
 }
 
 func main() {

@@ -115,11 +115,16 @@ export const useShellStore = defineStore("shell", {
   },
   actions: {
     async load() {
-      const response = await api.shell();
-      if (Array.isArray(response.items) && response.items.some((item) => typeof item.href === "string")) {
-        this.items = normalizeShellItems(response.items);
+      try {
+        const response = await api.shell();
+        if (Array.isArray(response.items) && response.items.some((item) => typeof item.href === "string")) {
+          this.items = normalizeShellItems(response.items);
+        }
+      } catch {
+        this.items = normalizeShellItems(defaultShellItems);
+      } finally {
+        this.ready = true;
       }
-      this.ready = true;
     },
   },
 });

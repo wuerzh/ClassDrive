@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { api } from "@/api/client";
+import { api, type UploadLifecycleController } from "@/api/client";
 import { useUploadStore } from "@/stores/upload";
 
 interface UploadItemState {
@@ -21,10 +22,34 @@ interface UploadStoreShape {
   abort: () => void;
 }
 
+function uploadControllerFromStore(): UploadLifecycleController {
+  const uploadStore = useUploadStore();
+  return {
+    beginBatch: (items) => uploadStore.beginBatch(items),
+    setAbortHandler: (handler) => uploadStore.setAbortHandler(handler),
+    applyAggregateProgress: (sentBytes, totalBytes) => uploadStore.applyAggregateProgress(sentBytes, totalBytes),
+    markBatchDone: () => uploadStore.markBatchDone(),
+    markBatchAborted: () => uploadStore.markBatchAborted(),
+    markFailedAt: (sentBytes) => uploadStore.markFailedAt(sentBytes),
+    isAbortRequested: () => uploadStore.abortRequested,
+    sentBytes: () => uploadStore.sentBytes,
+  };
+}
+
+type UploadFilesPayload = Parameters<typeof api.uploadFiles>[0];
+
+function uploadFilesWithStore(payload: Omit<UploadFilesPayload, "controller">): ReturnType<typeof api.uploadFiles> {
+  return api.uploadFiles({
+    ...payload,
+    controller: uploadControllerFromStore(),
+  });
+}
+
 class SuccessfulXMLHttpRequest {
   method = "";
   url = "";
   withCredentials = false;
+  requestHeaders = new Map<string, string>();
   status = 201;
   responseText = JSON.stringify({
     items: [],
@@ -47,6 +72,10 @@ class SuccessfulXMLHttpRequest {
     this.url = url;
   }
 
+  setRequestHeader(name: string, value: string) {
+    this.requestHeaders.set(name, value);
+  }
+
   send(body: Document | XMLHttpRequestBodyInit | null | undefined) {
     this.sentBody = body as FormData;
     this.upload.onprogress?.({
@@ -62,9 +91,18 @@ describe("api.uploadFiles", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.unstubAllGlobals();
+    document.cookie = "classdrive_csrf=; Max-Age=0; path=/";
+  });
+
+  it("keeps upload API independent from Pinia stores", () => {
+    const clientSource = readFileSync("src/api/client.ts", "utf8");
+
+    expect(clientSource).not.toContain('from "@/stores/upload"');
+    expect(clientSource).not.toContain("useUploadStore");
   });
 
   it("uses resumable upload flow for a single file upload", async () => {
+    document.cookie = "classdrive_csrf=upload-token; path=/";
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -93,37 +131,25 @@ describe("api.uploadFiles", () => {
     );
 
     const progress: number[] = [];
-    const result = await api.uploadFiles({
+    const result = await uploadFilesWithStore({
       space: "library",
       parentPath: "/",
       files: [{ file: new File(["hello world"], "hello.txt", { type: "text/plain" }) }],
       onProgress: (sent) => progress.push(sent),
     });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "/api/files/upload/sessions",
-      expect.objectContaining({
-        method: "POST",
-        credentials: "same-origin",
-        headers: expect.objectContaining({
-          "Tus-Resumable": "1.0.0",
-          "Upload-Length": "11",
-        }),
-      }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "/api/files/upload/sessions/session-1",
-      expect.objectContaining({
-        method: "PATCH",
-        credentials: "same-origin",
-        headers: expect.objectContaining({
-          "Tus-Resumable": "1.0.0",
-          "Upload-Offset": "0",
-        }),
-      }),
-    );
+    const [, createInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(createInit.method).toBe("POST");
+    expect(createInit.credentials).toBe("same-origin");
+    expect(new Headers(createInit.headers).get("Tus-Resumable")).toBe("1.0.0");
+    expect(new Headers(createInit.headers).get("Upload-Length")).toBe("11");
+    expect(new Headers(createInit.headers).get("X-CSRF-Token")).toBe("upload-token");
+    const [, patchInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(patchInit.method).toBe("PATCH");
+    expect(patchInit.credentials).toBe("same-origin");
+    expect(new Headers(patchInit.headers).get("Tus-Resumable")).toBe("1.0.0");
+    expect(new Headers(patchInit.headers).get("Upload-Offset")).toBe("0");
+    expect(new Headers(patchInit.headers).get("X-CSRF-Token")).toBe("upload-token");
     expect(progress).toContain(11);
     expect(result.summary.createdCount).toBe(1);
 
@@ -139,6 +165,7 @@ describe("api.uploadFiles", () => {
   });
 
   it("keeps directory uploads on the multipart path", async () => {
+    document.cookie = "classdrive_csrf=multipart-token; path=/";
     const xhrInstances: SuccessfulXMLHttpRequest[] = [];
     vi.stubGlobal("fetch", vi.fn());
     vi.stubGlobal(
@@ -153,7 +180,7 @@ describe("api.uploadFiles", () => {
 
     const guideFile = new File(["guide"], "guide.txt", { type: "text/plain" });
 
-    const result = await api.uploadFiles({
+    const result = await uploadFilesWithStore({
       space: "library",
       parentPath: "/",
       conflictMode: "rename",
@@ -163,6 +190,7 @@ describe("api.uploadFiles", () => {
     expect(xhrInstances).toHaveLength(1);
     expect(xhrInstances[0]?.url).toBe("/api/files/upload");
     expect(xhrInstances[0]?.method).toBe("POST");
+    expect(xhrInstances[0]?.requestHeaders.get("X-CSRF-Token")).toBe("multipart-token");
     expect(xhrInstances[0]?.sentBody?.get("conflictMode")).toBe("rename");
     expect(xhrInstances[0]?.sentBody?.getAll("relativePaths")).toEqual(["目录包/guide.txt"]);
     expect(result.summary.createdCount).toBe(1);
@@ -191,7 +219,7 @@ describe("api.uploadFiles", () => {
     );
 
     const uploadStore = useUploadStore() as unknown as UploadStoreShape;
-    const promise = api.uploadFiles({
+    const promise = uploadFilesWithStore({
       space: "library",
       parentPath: "/",
       files: [
@@ -247,7 +275,7 @@ describe("api.uploadFiles", () => {
     const uploadStore = useUploadStore() as unknown as UploadStoreShape;
 
     await expect(
-      api.uploadFiles({
+      uploadFilesWithStore({
         space: "library",
         parentPath: "/",
         files: [
@@ -296,7 +324,7 @@ describe("api.uploadFiles", () => {
     const uploadStore = useUploadStore() as unknown as UploadStoreShape;
 
     await expect(
-      api.uploadFiles({
+      uploadFilesWithStore({
         space: "library",
         parentPath: "/",
         files: [
@@ -341,7 +369,7 @@ describe("api.uploadFiles", () => {
     const uploadStore = useUploadStore() as unknown as UploadStoreShape;
 
     await expect(
-      api.uploadFiles({
+      uploadFilesWithStore({
         space: "library",
         parentPath: "/",
         files: [
@@ -393,7 +421,7 @@ describe("api.uploadFiles", () => {
     );
 
     const uploadStore = useUploadStore() as unknown as UploadStoreShape;
-    const promise = api.uploadFiles({
+    const promise = uploadFilesWithStore({
       space: "library",
       parentPath: "/",
       files: [
@@ -456,7 +484,7 @@ describe("api.uploadFiles", () => {
       } as unknown as typeof XMLHttpRequest,
     );
 
-    const result = await api.uploadFiles({
+    const result = await uploadFilesWithStore({
       space: "library",
       parentPath: "/",
       files: [{ file: new File(["hello world!"], "retry.txt", { type: "text/plain" }) }],
@@ -505,7 +533,7 @@ describe("api.uploadFiles", () => {
     );
 
     const uploadStore = useUploadStore() as unknown as UploadStoreShape;
-    const promise = api.uploadFiles({
+    const promise = uploadFilesWithStore({
       space: "library",
       parentPath: "/",
       files: [{ file: new File(["hello world"], "hello.txt", { type: "text/plain" }) }],
@@ -556,7 +584,7 @@ describe("api.uploadFiles", () => {
     const uploadStore = useUploadStore() as unknown as UploadStoreShape;
 
     await expect(
-      api.uploadFiles({
+      uploadFilesWithStore({
         space: "library",
         parentPath: "/",
         files: [{ file: new File(["hello world"], "hello.txt", { type: "text/plain" }) }],
@@ -591,7 +619,7 @@ describe("api.uploadFiles", () => {
     const uploadStore = useUploadStore() as unknown as UploadStoreShape;
 
     await expect(
-      api.uploadFiles({
+      uploadFilesWithStore({
         space: "library",
         parentPath: "/",
         files: [{ file: new File(["hello world"], "hello.txt", { type: "text/plain" }) }],

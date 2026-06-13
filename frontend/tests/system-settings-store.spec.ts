@@ -17,6 +17,7 @@ describe("system settings store", () => {
           singleAccountLoginEnabled: true,
           serverPort: "80",
           serverHost: "192.168.1.24",
+          defaultShareExpiresDays: 14,
         },
     });
 
@@ -25,12 +26,14 @@ describe("system settings store", () => {
       singleAccountLoginEnabled: true,
       serverPort: "80",
       serverHost: "192.168.1.24",
+      defaultShareExpiresDays: 14,
     });
     await expect(systemSettingsStore.load()).resolves.toEqual({
       uploadPanelEnabled: true,
       singleAccountLoginEnabled: true,
       serverPort: "80",
       serverHost: "192.168.1.24",
+      defaultShareExpiresDays: 14,
     });
 
     expect(systemSettingsSpy).toHaveBeenCalledTimes(1);
@@ -44,12 +47,14 @@ describe("system settings store", () => {
       singleAccountLoginEnabled: false,
       serverPort: "777",
       serverHost: "192.168.1.24",
+      defaultShareExpiresDays: 30,
     });
     expect(systemSettingsStore.settings).toEqual({
       uploadPanelEnabled: false,
       singleAccountLoginEnabled: false,
       serverPort: "777",
       serverHost: "192.168.1.24",
+      defaultShareExpiresDays: 30,
     });
 
     systemSettingsStore.clear();
@@ -59,6 +64,7 @@ describe("system settings store", () => {
       uploadPanelEnabled: true,
     });
     expect(systemSettingsStore.settings?.serverPort).toBe("80");
+    expect(systemSettingsStore.settings?.defaultShareExpiresDays).toBe(7);
   });
 
   it("saves system access port settings", async () => {
@@ -69,6 +75,7 @@ describe("system settings store", () => {
           singleAccountLoginEnabled: false,
           serverPort: "777",
           serverHost: "192.168.1.24",
+          defaultShareExpiresDays: 21,
         },
     });
 
@@ -76,17 +83,20 @@ describe("system settings store", () => {
       uploadPanelEnabled: true,
       singleAccountLoginEnabled: false,
       serverPort: "777",
+      defaultShareExpiresDays: 21,
     })).resolves.toEqual({
       uploadPanelEnabled: true,
       singleAccountLoginEnabled: false,
       serverPort: "777",
       serverHost: "192.168.1.24",
+      defaultShareExpiresDays: 21,
     });
 
     expect(updateSpy).toHaveBeenCalledWith({
       uploadPanelEnabled: true,
       singleAccountLoginEnabled: false,
       serverPort: "777",
+      defaultShareExpiresDays: 21,
     });
   });
 });

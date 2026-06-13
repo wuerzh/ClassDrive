@@ -877,6 +877,7 @@ import { useAssignmentDetailStore, type AssignmentSubmissionSort } from "@/store
 import { useClassesStore } from "@/stores/classes";
 import { useToastStore } from "@/stores/toast";
 import { useUploadStore } from "@/stores/upload";
+import type { StatusPillTone } from "@/types/status-pill";
 import { getFilePreviewKind, type FilePreviewKind } from "@/utils/file-preview";
 import { exportRowsToSpreadsheet } from "@/utils/spreadsheet-export";
 import { assignmentStatusLabel, assignmentStatusTone, reviewStatusLabel, submissionStatusLabel, submissionStatusTone, uiCopy } from "@/utils/ui-copy";
@@ -1226,7 +1227,7 @@ function reviewStatusText(value: "pending" | "reviewed") {
   return reviewStatusLabel(value);
 }
 
-function reviewStatusTone(value: "pending" | "reviewed"): string {
+function reviewStatusTone(value: "pending" | "reviewed"): StatusPillTone {
   return value === "reviewed" ? "status-pill--success" : "status-pill--warning";
 }
 
@@ -1234,7 +1235,7 @@ function submissionStatusText(value: "partial" | "submitted") {
   return submissionStatusLabel(value);
 }
 
-function submissionStatusPillTone(value: "partial" | "submitted") {
+function submissionStatusPillTone(value: "partial" | "submitted"): StatusPillTone {
   return submissionStatusTone(value);
 }
 

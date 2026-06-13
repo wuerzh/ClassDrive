@@ -228,7 +228,7 @@ describe("StudentsView", () => {
     expect(wrapper.get('[data-testid="student-reset-password-1"]').text()).toContain("重置密码");
 
     await wrapper.get('[data-testid="student-reset-password-1"]').trigger("click");
-    expect(wrapper.get('[data-testid="student-reset-password-dialog"]').text()).toContain("默认密码 123456");
+    expect(wrapper.get('[data-testid="student-reset-password-dialog"]').text()).toContain("系统默认密码");
     expect(wrapper.get('[data-testid="student-reset-password-dialog"]').text()).toContain("登录后必须修改密码");
 
     await wrapper.get('[data-testid="student-reset-password-confirm"]').trigger("click");

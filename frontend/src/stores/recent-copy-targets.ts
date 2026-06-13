@@ -13,6 +13,26 @@ function sameRecentTarget(left: RecentCopyTarget, right: RecentCopyTarget) {
   return left.space === right.space && left.classId === right.classId && left.path === right.path;
 }
 
+function isRecentCopyTargetSpace(value: string): value is RecentCopyTarget["space"] {
+  return value === "library" || value === "public" || value === "class";
+}
+
+function fromRecentCopyTargetItem(item: RecentCopyTargetItem): RecentCopyTarget | null {
+  if (!isRecentCopyTargetSpace(item.space)) {
+    return null;
+  }
+  if (!item.path || !item.label) {
+    return null;
+  }
+  return {
+    space: item.space,
+    classId: item.classId ?? null,
+    path: item.path,
+    label: item.label,
+    pinned: item.pinned,
+  };
+}
+
 function normalizeRecentCopyTargets(items: RecentCopyTarget[]) {
   const pinned = items.filter((item) => item.pinned);
   const recent = items.filter((item) => !item.pinned);
@@ -53,13 +73,9 @@ export const useRecentCopyTargetsStore = defineStore("recent-copy-targets", {
       try {
         const response = await api.recentCopyTargets();
         this.apply(
-          response.items.map((item) => ({
-            space: item.space as RecentCopyTarget["space"],
-            classId: item.classId ?? null,
-            path: item.path,
-            label: item.label,
-            pinned: item.pinned,
-          })),
+          response.items
+            .map((item) => fromRecentCopyTargetItem(item))
+            .filter((item): item is RecentCopyTarget => item !== null),
         );
       } catch {
         this.items = [];

@@ -61,6 +61,7 @@ import SettingsPanelSection from "@/components/SettingsPanelSection.vue";
 import { ApiError } from "@/api/client";
 import { useTeacherUsersStore } from "@/stores/teacher-users";
 import { useToastStore } from "@/stores/toast";
+import type { StatusPillTone } from "@/types/status-pill";
 import { teacherRoleLabel, teacherStateLabel } from "@/utils/ui-copy";
 
 const props = defineProps<{
@@ -77,7 +78,7 @@ const role = ref<"owner" | "staff">("staff");
 const disabled = ref(false);
 const password = ref("");
 
-const teacherSummaryItems = computed(() => [
+const teacherSummaryItems = computed<Array<{ label: string; value: string; tone?: StatusPillTone }>>(() => [
   { label: "登录账号", value: teacher.value?.username || "加载中" },
   { label: "当前角色", value: teacherRoleLabel(role.value), tone: "status-pill--accent" },
   {

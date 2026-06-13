@@ -69,6 +69,7 @@ describe("collectDroppedUploadItems", () => {
     const guideFile = new File(["guide"], "guide.txt", { type: "text/plain" });
     const answerFile = new File(["answer"], "answer.txt", { type: "text/plain" });
     const archiveFile = new File(["archive"], "作业.rar", { type: "application/x-rar-compressed" });
+    const duplicateArchiveFile = new File(["archive"], "目录包.zip", { type: "application/zip" });
     const dataTransfer = {
       items: [
         {
@@ -78,6 +79,9 @@ describe("collectDroppedUploadItems", () => {
               createFileEntry(archiveFile),
               createDirectoryEntry("作业", [createFileEntry(answerFile)]),
             ]),
+        },
+        {
+          webkitGetAsEntry: () => createFileEntry(duplicateArchiveFile),
         },
       ],
       files: [],

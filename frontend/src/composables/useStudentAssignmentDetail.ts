@@ -8,13 +8,18 @@ export function useStudentAssignmentDetail(assignmentId: ComputedRef<number>) {
   const loading = ref(true);
   const notFound = ref(false);
   const errorText = ref("");
+  let loadSequence = 0;
 
   async function loadAssignment() {
+    const requestSequence = ++loadSequence;
     loading.value = true;
     errorText.value = "";
     notFound.value = false;
     try {
       const response = await api.studentAssignment(assignmentId.value);
+      if (requestSequence !== loadSequence) {
+        return;
+      }
       const normalizedAssignment = {
         ...response,
         assignmentAttachments: response.assignmentAttachments ?? [],
@@ -24,6 +29,9 @@ export function useStudentAssignmentDetail(assignmentId: ComputedRef<number>) {
       assignmentAttachments.value = normalizedAssignment.assignmentAttachments;
       items.value = normalizedAssignment.items;
     } catch (error) {
+      if (requestSequence !== loadSequence) {
+        return;
+      }
       if (error instanceof ApiError && error.status === 404) {
         notFound.value = true;
         assignment.value = null;
@@ -33,7 +41,9 @@ export function useStudentAssignmentDetail(assignmentId: ComputedRef<number>) {
       }
       errorText.value = error instanceof ApiError ? error.message : "加载作业详情失败";
     } finally {
-      loading.value = false;
+      if (requestSequence === loadSequence) {
+        loading.value = false;
+      }
     }
   }
 

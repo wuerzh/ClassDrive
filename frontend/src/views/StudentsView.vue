@@ -155,7 +155,7 @@
   <ConfirmDialog
     :open="pendingResetPasswordStudent !== null"
     title="确认重置密码"
-    :message="pendingResetPasswordStudent ? `将 ${pendingResetPasswordStudent.displayName} 的密码重置为默认密码 123456，学生登录后必须修改密码。` : ''"
+    :message="pendingResetPasswordStudent ? `将 ${pendingResetPasswordStudent.displayName} 的密码重置为系统默认密码，学生登录后必须修改密码。` : ''"
     test-id-prefix="student-reset-password"
     confirm-label="确认重置"
     @cancel="pendingResetPasswordStudent = null"

@@ -357,6 +357,7 @@ describe("SettingsView", () => {
     expect(wrapper.get('[data-testid="system-single-account-login"]').element).toHaveProperty("checked", true);
     await wrapper.get('[data-testid="system-port-input"]').setValue("777");
     await wrapper.get('[data-testid="system-single-account-login"]').setValue(false);
+    await wrapper.get('[data-testid="system-share-expires-input"]').setValue("30");
     await wrapper.get('[data-testid="system-settings-save"]').trigger("click");
     await flushPromises();
 
@@ -370,6 +371,7 @@ describe("SettingsView", () => {
           uploadPanelEnabled: true,
           singleAccountLoginEnabled: false,
           serverPort: "777",
+          defaultShareExpiresDays: 30,
         }),
       }),
     );

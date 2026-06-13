@@ -76,6 +76,18 @@ func TestStartupCredentialsMessageShowsDefaultAdminAccount(t *testing.T) {
 	}
 }
 
+func TestStartupCredentialsMessageHidesOverriddenDefaultPassword(t *testing.T) {
+	t.Setenv("CLASSDRIVE_DEFAULT_TEACHER_PASSWORD", "admin987")
+
+	got := startupCredentialsMessage()
+	if !strings.Contains(got, "admin") || !strings.Contains(got, "CLASSDRIVE_DEFAULT_TEACHER_PASSWORD") {
+		t.Fatalf("startupCredentialsMessage() = %q, want env override guidance", got)
+	}
+	if strings.Contains(got, "admin987") || strings.Contains(got, "demo123") {
+		t.Fatalf("startupCredentialsMessage() = %q, want no concrete password when overridden", got)
+	}
+}
+
 func TestStartupHostUsesDetectedIP(t *testing.T) {
 	got := startupHost(func() (string, bool) {
 		return "192.168.1.23", true

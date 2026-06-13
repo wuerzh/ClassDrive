@@ -10,6 +10,9 @@ frontend/node_modules/
 .DS_Store
 Thumbs.db
 
+# Claude Code 工具配置（不公开）
+.claude/
+
 # Runtime data and local user files
 var/
 *.db

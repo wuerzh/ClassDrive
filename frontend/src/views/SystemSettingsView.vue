@@ -42,6 +42,26 @@
         </label>
       </section>
 
+      <section class="settings-access-card" data-testid="system-share-card">
+        <div>
+          <strong>资料分享</strong>
+          <p class="muted">老师创建分享链接时默认套用的有效期，可在创建时单独调整。</p>
+        </div>
+
+        <label class="app-field settings-access-card__field">
+          <span>默认分享有效期（天）</span>
+          <input
+            v-model="defaultShareExpiresDays"
+            class="copy-dialog__search"
+            type="number"
+            min="1"
+            max="3650"
+            inputmode="numeric"
+            data-testid="system-share-expires-input"
+          />
+        </label>
+      </section>
+
       <p v-if="formError" class="form-error" data-testid="system-settings-error">{{ formError }}</p>
 
       <div class="settings-actions">
@@ -69,6 +89,7 @@ const toastStore = useToastStore();
 const isOwner = computed(() => authStore.user?.role === "owner");
 const serverPort = ref("80");
 const singleAccountLoginEnabled = ref(true);
+const defaultShareExpiresDays = ref(7);
 const formError = ref("");
 
 const accessUrl = computed(() => {
@@ -81,6 +102,7 @@ const accessUrl = computed(() => {
 function syncFormFromStore() {
   serverPort.value = systemSettingsStore.settings?.serverPort || "80";
   singleAccountLoginEnabled.value = systemSettingsStore.settings?.singleAccountLoginEnabled ?? true;
+  defaultShareExpiresDays.value = systemSettingsStore.settings?.defaultShareExpiresDays ?? 7;
 }
 
 function validatePort(value: string) {
@@ -88,6 +110,13 @@ function validatePort(value: string) {
   const parsed = Number(trimmed);
   if (!/^\d+$/.test(trimmed) || !Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
     return "端口必须为 1-65535 的数字";
+  }
+  return "";
+}
+
+function validateShareExpiresDays(value: number) {
+  if (!Number.isInteger(value) || value < 1 || value > 3650) {
+    return "默认分享有效期需为 1-3650 之间的整数天";
   }
   return "";
 }
@@ -109,11 +138,17 @@ async function saveSettings() {
   if (formError.value) {
     return;
   }
+  const shareExpiresDays = Number(defaultShareExpiresDays.value);
+  formError.value = validateShareExpiresDays(shareExpiresDays);
+  if (formError.value) {
+    return;
+  }
   try {
     await systemSettingsStore.save({
       uploadPanelEnabled: systemSettingsStore.settings?.uploadPanelEnabled ?? true,
       singleAccountLoginEnabled: singleAccountLoginEnabled.value,
       serverPort: serverPort.value.trim(),
+      defaultShareExpiresDays: shareExpiresDays,
     });
     syncFormFromStore();
     toastStore.push("success", "系统设置已保存，端口已立即生效");

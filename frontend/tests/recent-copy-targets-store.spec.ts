@@ -25,6 +25,24 @@ describe("recent copy targets store", () => {
     expect(recentCopyTargetsStore.pinnedCount).toBe(1);
   });
 
+  it("drops malformed recent targets instead of trusting invalid spaces", async () => {
+    const recentCopyTargetsStore = useRecentCopyTargetsStore();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [
+          { space: "archive", path: "/旧入口", label: "旧入口" },
+          { space: "class", classId: 2, path: "/班级资料", label: "班级资料" },
+        ],
+      }),
+    }));
+
+    await expect(recentCopyTargetsStore.load()).resolves.toEqual([
+      { space: "class", classId: 2, path: "/班级资料", label: "班级资料" },
+    ]);
+  });
+
   it("remembers, pins and clears unpinned targets", async () => {
     const recentCopyTargetsStore = useRecentCopyTargetsStore();
     const saveRecentCopyTargetsSpy = vi.spyOn(api, "saveRecentCopyTargets").mockResolvedValue({ items: [] });

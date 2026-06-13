@@ -12,7 +12,7 @@
       <div class="files-toolbar">
       <div class="files-toolbar__top">
         <div class="files-context-bar" data-testid="files-context-bar">
-          <nav class="files-breadcrumb" aria-label="当前路径">
+          <nav class="files-breadcrumb" aria-label="当前路径" role="navigation">
             <button
               class="files-breadcrumb__button"
               type="button"
@@ -54,6 +54,7 @@
           </button>
           <div class="files-primary-actions__group">
             <button class="button button--ghost" type="button" data-testid="files-refresh" aria-label="刷新当前文件夹" @click="loadFiles">刷新</button>
+            <button v-if="space === 'library'" class="button button--ghost" type="button" data-testid="files-share-manage" @click="shareManageDialogOpen = true">分享管理</button>
             <button class="button button--primary" type="button" data-testid="upload-material-open" @click="uploadDialogOpen = true">上传资料</button>
             <button class="button" type="button" @click="promptCreateFolder">新建文件夹</button>
             <button class="button" type="button" data-testid="create-file-button" @click="promptCreateFile">新建文件</button>
@@ -175,7 +176,7 @@
       @next="goNextFilePage"
     />
 
-    <table v-if="viewMode === 'list'" class="files-table" data-testid="files-table">
+    <table v-if="viewMode === 'list'" class="files-table" data-testid="files-table" @keydown="handleListKeyboardNavigation">
       <thead>
         <tr>
           <th>
@@ -183,6 +184,7 @@
               type="checkbox"
               data-testid="select-all-entries"
               :checked="allItemsSelected"
+              :aria-label="allItemsSelected ? '取消全选' : '全选所有项目'"
               @change="toggleSelectAll"
             />
           </th>
@@ -229,15 +231,18 @@
           <th>操作</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody v-if="!enableVirtualScroll">
         <tr
-          v-for="item in displayedItems"
+          v-for="(item, index) in displayedItems"
           :key="item.id"
+          :data-item-id="item.id"
           class="files-table__row"
           role="button"
           tabindex="0"
-          :aria-label="`打开 ${item.name}`"
+          :aria-label="`${item.kind === 'dir' ? '文件夹' : '文件'}: ${item.name}`"
+          :aria-describedby="`item-meta-${item.id}`"
           @click="preview(item)"
+          @focus="handleItemFocus(index)"
           @keydown.enter.self.prevent="preview(item)"
           @keydown.space.self.prevent="preview(item)"
         >
@@ -246,6 +251,7 @@
               :data-testid="`select-entry-${item.id}`"
               type="checkbox"
               :checked="isEntrySelected(item.id)"
+              :aria-label="`选择 ${item.name}`"
               @click.stop
               @change="toggleEntrySelection(item.id, $event)"
             />
@@ -256,6 +262,7 @@
               class="files-entry-link"
               type="button"
               :data-testid="`entry-open-${item.id}`"
+              :aria-label="`打开文件夹 ${item.name}`"
               @click.stop="openDirectory(item)"
             >
               <span :data-testid="`entry-name-${item.id}`">{{ item.name }}</span>
@@ -264,6 +271,11 @@
               {{ item.name }}
             </span>
             <p v-if="isSearching" class="files-entry-meta">{{ item.path }}</p>
+            <span :id="`item-meta-${item.id}`" class="sr-only">
+              {{ item.kind === 'dir' ? '文件夹' : '文件' }}，
+              更新于 {{ formatFileUpdatedAt(item.updatedAt) }}，
+              大小 {{ formatFileSize(item.size) }}
+            </span>
           </td>
           <td>{{ item.kind === "dir" ? "文件夹" : "文件" }}</td>
           <td :data-testid="`entry-updated-${item.id}`">{{ formatFileUpdatedAt(item.updatedAt) }}</td>
@@ -308,6 +320,7 @@
               >
                 <button class="text-button" type="button" :data-testid="`copy-${item.id}`" @click.stop="openCopyDialog(item)">复制</button>
                 <button class="text-button" type="button" :data-testid="`move-${item.id}`" @click.stop="openMoveDialog(item)">移动</button>
+                <button v-if="space === 'library'" class="text-button" type="button" :data-testid="`share-${item.id}`" @click.stop="openShareDialog(item)">分享</button>
                 <button class="text-button" type="button" @click.stop="rename(item)">重命名</button>
                 <button class="text-button text-button--danger" type="button" @click.stop="remove(item)">删除</button>
               </div>
@@ -318,9 +331,105 @@
           <td colspan="6" class="files-table__empty">{{ uiCopy.emptyDirectory }}</td>
         </tr>
       </tbody>
+      <tbody v-else class="files-table__virtual-body">
+        <RecycleScroller
+          :items="displayedItems"
+          :item-size="listItemSize"
+          key-field="id"
+          class="files-table-scroller"
+          v-slot="{ item }"
+        >
+          <tr
+            class="files-table__row"
+            role="button"
+            tabindex="0"
+            :aria-label="`打开 ${item.name}`"
+            @click="preview(item)"
+            @keydown.enter.self.prevent="preview(item)"
+            @keydown.space.self.prevent="preview(item)"
+          >
+            <td>
+              <input
+                :data-testid="`select-entry-${item.id}`"
+                type="checkbox"
+                :checked="isEntrySelected(item.id)"
+                @click.stop
+                @change="toggleEntrySelection(item.id, $event)"
+              />
+            </td>
+            <td>
+              <button
+                v-if="item.kind === 'dir'"
+                class="files-entry-link"
+                type="button"
+                :data-testid="`entry-open-${item.id}`"
+                @click.stop="openDirectory(item)"
+              >
+                <span :data-testid="`entry-name-${item.id}`">{{ item.name }}</span>
+              </button>
+              <span v-else :data-testid="`entry-name-${item.id}`">
+                {{ item.name }}
+              </span>
+              <p v-if="isSearching" class="files-entry-meta">{{ item.path }}</p>
+            </td>
+            <td>{{ item.kind === "dir" ? "文件夹" : "文件" }}</td>
+            <td :data-testid="`entry-updated-${item.id}`">{{ formatFileUpdatedAt(item.updatedAt) }}</td>
+            <td>{{ formatFileSize(item.size) }}</td>
+            <td class="files-table__actions">
+              <div class="files-entry-actions__primary" :data-testid="`row-primary-actions-${item.id}`">
+                <button class="text-button" type="button" :data-testid="`preview-entry-${item.id}`" @click.stop="preview(item)">{{ item.kind === "dir" ? "进入" : "预览" }}</button>
+                <button v-if="canEditFile(item)" class="text-button" type="button" :data-testid="`edit-entry-${item.id}`" @click.stop="openEditor(item)">编辑</button>
+                <a
+                  v-if="item.kind === 'dir' && item.archiveUrl"
+                  class="text-button"
+                  :data-testid="`download-entry-${item.id}`"
+                  :href="item.archiveUrl"
+                  @click.stop
+                >
+                  下载压缩包
+                </a>
+                <a
+                  v-else-if="item.downloadUrl"
+                  class="text-button"
+                  :data-testid="`download-entry-${item.id}`"
+                  :href="item.downloadUrl"
+                  @click.stop
+                >
+                  下载
+                </a>
+              </div>
+              <div class="files-entry-actions__overflow" :data-testid="`row-actions-overflow-${item.id}`">
+                <button
+                  class="text-button files-entry-actions__more"
+                  type="button"
+                  :data-testid="`row-more-actions-${item.id}`"
+                  :aria-expanded="isEntryActionMenuOpen(item.id)"
+                  @click.stop="toggleEntryActionMenu(item.id)"
+                >
+                  更多
+                </button>
+                <div
+                  v-show="isEntryActionMenuOpen(item.id)"
+                  class="files-entry-actions__secondary"
+                  :data-testid="`row-secondary-actions-${item.id}`"
+                >
+                  <button class="text-button" type="button" :data-testid="`copy-${item.id}`" @click.stop="openCopyDialog(item)">复制</button>
+                  <button class="text-button" type="button" :data-testid="`move-${item.id}`" @click.stop="openMoveDialog(item)">移动</button>
+                  <button v-if="space === 'library'" class="text-button" type="button" :data-testid="`share-${item.id}`" @click.stop="openShareDialog(item)">分享</button>
+                  <button class="text-button" type="button" @click.stop="rename(item)">重命名</button>
+                  <button class="text-button text-button--danger" type="button" @click.stop="remove(item)">删除</button>
+                </div>
+              </div>
+            </td>
+          </tr>
+        </RecycleScroller>
+        <tr v-if="!displayedItems.length">
+          <td colspan="6" class="files-table__empty">{{ uiCopy.emptyDirectory }}</td>
+        </tr>
+      </tbody>
     </table>
 
-    <div v-else class="files-grid" :class="filesGridSizeClass" data-testid="files-grid">
+    <div v-else-if="!enableVirtualScroll" class="files-grid" :class="filesGridSizeClass" data-testid="files-grid">
       <article
         v-for="item in displayedItems"
         :key="item.id"
@@ -415,6 +524,7 @@
             >
               <button class="text-button" type="button" :data-testid="`copy-${item.id}`" @click.stop="openCopyDialog(item)">复制</button>
               <button class="text-button" type="button" :data-testid="`move-${item.id}`" @click.stop="openMoveDialog(item)">移动</button>
+              <button v-if="space === 'library'" class="text-button" type="button" :data-testid="`share-${item.id}`" @click.stop="openShareDialog(item)">分享</button>
               <button class="text-button" type="button" @click.stop="rename(item)">重命名</button>
               <button class="text-button text-button--danger" type="button" @click.stop="remove(item)">删除</button>
             </div>
@@ -424,6 +534,118 @@
 
       <p v-if="!displayedItems.length" class="files-table__empty">{{ uiCopy.emptyDirectory }}</p>
     </div>
+
+    <RecycleScroller
+      v-else
+      :items="displayedItems"
+      :item-size="gridItemSize"
+      :grid-items="gridColumns"
+      key-field="id"
+      class="files-grid files-grid-scroller"
+      :class="filesGridSizeClass"
+      data-testid="files-grid"
+      v-slot="{ item }"
+    >
+      <article
+        class="files-grid__card"
+        role="button"
+        tabindex="0"
+        :aria-label="`打开 ${item.name}`"
+        @click="preview(item)"
+        @keydown.enter.self.prevent="preview(item)"
+        @keydown.space.self.prevent="preview(item)"
+      >
+        <label class="files-grid__select" @click.stop>
+          <input
+            :data-testid="`select-entry-${item.id}`"
+            type="checkbox"
+            :checked="isEntrySelected(item.id)"
+            @click.stop
+            @change="toggleEntrySelection(item.id, $event)"
+          />
+          <span>{{ item.kind === "dir" ? "文件夹" : "文件" }}</span>
+        </label>
+
+        <button
+          v-if="resolveGridThumbnailUrl(item)"
+          class="files-grid__thumbnail-button"
+          type="button"
+          :data-testid="`grid-thumbnail-open-${item.id}`"
+          :aria-label="`预览 ${item.name}`"
+          @click.stop="preview(item)"
+        >
+          <img
+            class="files-grid__thumbnail"
+            :data-testid="`grid-thumbnail-${item.id}`"
+            :src="resolveGridThumbnailUrl(item) ?? ''"
+            :alt="item.name"
+            loading="lazy"
+            decoding="async"
+          />
+        </button>
+
+        <button
+          v-if="item.kind === 'dir'"
+          class="files-entry-link files-grid__title"
+          type="button"
+          :data-testid="`entry-open-${item.id}`"
+          @click.stop="openDirectory(item)"
+        >
+          <span :data-testid="`entry-name-${item.id}`">{{ item.name }}</span>
+        </button>
+        <div v-else class="files-grid__title" :data-testid="`entry-name-${item.id}`">{{ item.name }}</div>
+
+        <p v-if="isSearching" class="files-entry-meta">{{ item.path }}</p>
+        <p class="muted">{{ formatFileSize(item.size) }}</p>
+
+        <div class="files-grid__actions">
+          <div class="files-entry-actions__primary" :data-testid="`card-primary-actions-${item.id}`">
+            <button class="text-button" type="button" :data-testid="`preview-entry-${item.id}`" @click.stop="preview(item)">{{ item.kind === "dir" ? "进入" : "预览" }}</button>
+            <button v-if="canEditFile(item)" class="text-button" type="button" :data-testid="`edit-entry-${item.id}`" @click.stop="openEditor(item)">编辑</button>
+            <a
+              v-if="item.kind === 'dir' && item.archiveUrl"
+              class="text-button"
+              :data-testid="`download-entry-${item.id}`"
+              :href="item.archiveUrl"
+              @click.stop
+            >
+              下载压缩包
+            </a>
+            <a
+              v-else-if="item.downloadUrl"
+              class="text-button"
+              :data-testid="`download-entry-${item.id}`"
+              :href="item.downloadUrl"
+              @click.stop
+            >
+              下载
+            </a>
+          </div>
+          <div class="files-entry-actions__overflow" :data-testid="`card-actions-overflow-${item.id}`">
+            <button
+              class="text-button files-entry-actions__more"
+              type="button"
+              :data-testid="`card-more-actions-${item.id}`"
+              :aria-expanded="isEntryActionMenuOpen(item.id)"
+              @click.stop="toggleEntryActionMenu(item.id)"
+            >
+              更多
+            </button>
+            <div
+              v-show="isEntryActionMenuOpen(item.id)"
+              class="files-entry-actions__secondary"
+              :data-testid="`card-secondary-actions-${item.id}`"
+            >
+              <button class="text-button" type="button" :data-testid="`copy-${item.id}`" @click.stop="openCopyDialog(item)">复制</button>
+              <button class="text-button" type="button" :data-testid="`move-${item.id}`" @click.stop="openMoveDialog(item)">移动</button>
+              <button v-if="space === 'library'" class="text-button" type="button" :data-testid="`share-${item.id}`" @click.stop="openShareDialog(item)">分享</button>
+              <button class="text-button" type="button" @click.stop="rename(item)">重命名</button>
+              <button class="text-button text-button--danger" type="button" @click.stop="remove(item)">删除</button>
+            </div>
+          </div>
+        </div>
+      </article>
+    </RecycleScroller>
 
     </section>
 
@@ -675,6 +897,17 @@
       @cancel="textInputDialogState = null"
       @confirm="confirmTextInputDialog"
     />
+
+    <ShareCreateDialog
+      :open="shareCreateDialogOpen"
+      :entry="shareDialogEntry"
+      @close="shareCreateDialogOpen = false"
+    />
+
+    <ShareManageDialog
+      :open="shareManageDialogOpen"
+      @close="shareManageDialogOpen = false"
+    />
   </section>
 </template>
 
@@ -692,10 +925,13 @@ import {
   type FileSpace,
   type UploadConflictMode,
   type UploadFileItem,
+  type UploadLifecycleController,
 } from "@/api/client";
 import FileEditorDialog from "@/components/FileEditorDialog.vue";
 import FilePreviewDialog from "@/components/FilePreviewDialog.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
+import ShareCreateDialog from "@/components/ShareCreateDialog.vue";
+import ShareManageDialog from "@/components/ShareManageDialog.vue";
 import PaginationControls from "@/components/PaginationControls.vue";
 import ResourceList from "@/components/ResourceList.vue";
 import TextInputDialog from "@/components/TextInputDialog.vue";
@@ -705,6 +941,9 @@ import { useUploadStore } from "@/stores/upload";
 import { canEditTextFile, getFilePreviewKind } from "@/utils/file-preview";
 import { uiCopy, uploadSuccessMessage } from "@/utils/ui-copy";
 import { collectDroppedUploadItems } from "@/utils/upload-drop";
+import { filterRedundantDirectoryArchives } from "@/utils/upload-items";
+import { RecycleScroller } from "vue-virtual-scroller";
+import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
 
 interface BreadcrumbItem {
   label: string;
@@ -770,6 +1009,9 @@ const filePageSize = ref(defaultFilesPageSize);
 const totalFiles = ref(0);
 const totalFilePages = ref(1);
 const openEntryActionMenuId = ref<number | null>(null);
+const shareCreateDialogOpen = ref(false);
+const shareManageDialogOpen = ref(false);
+const shareDialogEntry = ref<FileItem | null>(null);
 const selectedEntryIds = ref<number[]>([]);
 const targetDialogEntries = ref<FileItem[]>([]);
 const targetDialogMode = ref<"copy" | "move">("copy");
@@ -881,6 +1123,24 @@ const filteredCopyTargetFolders = computed(() => {
     return copyTargetFolders.value;
   }
   return copyTargetFolders.value.filter((item) => item.name.includes(keyword));
+});
+
+// 虚拟滚动配置
+const enableVirtualScroll = computed(() => displayedItems.value.length > 20);
+const listItemSize = 48; // 列表视图每行高度（px）
+const gridItemSize = computed(() => {
+  switch (gridSize.value) {
+    case 'small': return 200;
+    case 'large': return 320;
+    default: return 260;
+  }
+});
+const gridColumns = computed(() => {
+  switch (gridSize.value) {
+    case 'small': return 5;
+    case 'large': return 3;
+    default: return 4;
+  }
 });
 
 function normalizePath(value: string): string {
@@ -1582,13 +1842,14 @@ function closeUploadDialog() {
 }
 
 function buildUploadItems(files: FileList): UploadFileItem[] {
-  return Array.from(files).map((file) => {
+  const items = Array.from(files).map((file) => {
     const relativePath = typeof file.webkitRelativePath === "string" && file.webkitRelativePath.length > 0 ? file.webkitRelativePath : undefined;
     return {
       file,
       relativePath,
     };
   });
+  return filterRedundantDirectoryArchives(items);
 }
 
 async function uploadFromInput(target: HTMLInputElement, directoryUpload: boolean) {
@@ -1600,12 +1861,23 @@ async function uploadFromInput(target: HTMLInputElement, directoryUpload: boolea
   target.value = "";
 }
 
+function createUploadLifecycleController(): UploadLifecycleController {
+  return {
+    beginBatch: (items) => uploadStore.beginBatch(items),
+    setAbortHandler: (handler) => uploadStore.setAbortHandler(handler),
+    applyAggregateProgress: (sentBytes, totalBytes) => uploadStore.applyAggregateProgress(sentBytes, totalBytes),
+    markBatchDone: () => uploadStore.markBatchDone(),
+    markBatchAborted: () => uploadStore.markBatchAborted(),
+    markFailedAt: (sentBytes) => uploadStore.markFailedAt(sentBytes),
+    isAbortRequested: () => uploadStore.abortRequested,
+    sentBytes: () => uploadStore.sentBytes,
+  };
+}
+
 async function uploadItems(files: UploadFileItem[], directoryUpload: boolean) {
   if (files.length === 0) {
     return;
   }
-  const totalBytes = files.reduce((sum, item) => sum + item.file.size, 0);
-  uploadStore.start(totalBytes);
 
   try {
     const result = await api.uploadFiles({
@@ -1614,12 +1886,7 @@ async function uploadItems(files: UploadFileItem[], directoryUpload: boolean) {
       parentPath: currentPath.value,
       files,
       conflictMode: uploadConflictMode.value,
-      onProgress: (sent, total) => {
-        if (total > 0) {
-          uploadStore.start(total);
-        }
-        uploadStore.progress(sent);
-      },
+      controller: createUploadLifecycleController(),
     });
     toastStore.push("success", uploadSuccessMessage(result.summary, directoryUpload));
     await loadFiles();
@@ -1869,6 +2136,12 @@ function closeCopyDialog() {
   copyErrorText.value = "";
   copySearch.value = "";
   copyCreateFolderName.value = "";
+}
+
+function openShareDialog(item: FileItem) {
+  shareDialogEntry.value = item;
+  shareCreateDialogOpen.value = true;
+  openEntryActionMenuId.value = null;
 }
 
 watch([copyTargetSpace, copyTargetClassId], async ([value], [previousValue]) => {
@@ -2336,7 +2609,78 @@ watch(copySearch, async () => {
 
 watch(viewMode, () => {
   openEntryActionMenuId.value = null;
+  // 视图切换后重置焦点索引
+  focusedItemIndex.value = -1;
 });
+
+// 键盘导航支持
+const focusedItemIndex = ref(-1);
+
+function handleListKeyboardNavigation(event: KeyboardEvent) {
+  if (displayedItems.value.length === 0) {
+    return;
+  }
+
+  const key = event.key;
+
+  // Arrow 键导航
+  if (key === 'ArrowDown' || key === 'ArrowUp') {
+    event.preventDefault();
+
+    if (focusedItemIndex.value === -1) {
+      // 首次导航，聚焦到第一项
+      focusedItemIndex.value = 0;
+    } else if (key === 'ArrowDown' && focusedItemIndex.value < displayedItems.value.length - 1) {
+      focusedItemIndex.value++;
+    } else if (key === 'ArrowUp' && focusedItemIndex.value > 0) {
+      focusedItemIndex.value--;
+    }
+
+    // 聚焦到对应的元素
+    focusItemByIndex(focusedItemIndex.value);
+  }
+  // Home / End 键
+  else if (key === 'Home') {
+    event.preventDefault();
+    focusedItemIndex.value = 0;
+    focusItemByIndex(0);
+  }
+  else if (key === 'End') {
+    event.preventDefault();
+    focusedItemIndex.value = displayedItems.value.length - 1;
+    focusItemByIndex(focusedItemIndex.value);
+  }
+  // Escape 键关闭菜单
+  else if (key === 'Escape') {
+    if (openEntryActionMenuId.value !== null) {
+      event.preventDefault();
+      openEntryActionMenuId.value = null;
+    }
+  }
+}
+
+function focusItemByIndex(index: number) {
+  if (index < 0 || index >= displayedItems.value.length) {
+    return;
+  }
+
+  const item = displayedItems.value[index];
+  const selector = viewMode.value === 'list'
+    ? `.files-table__row[data-item-id="${item.id}"]`
+    : `.files-grid__card[data-item-id="${item.id}"]`;
+
+  const element = document.querySelector(selector) as HTMLElement;
+  if (element) {
+    element.focus();
+    // 确保元素在视口中可见
+    element.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+function handleItemFocus(index: number) {
+  focusedItemIndex.value = index;
+}
+
 </script>
 
 <style scoped>
@@ -2873,5 +3217,389 @@ watch(viewMode, () => {
   .files-toolbar__search-slot .files-controls__search {
     flex-wrap: wrap;
   }
+}
+
+/* 虚拟滚动样式 */
+.files-table__virtual-body {
+  display: block;
+  width: 100%;
+}
+
+.files-table-scroller {
+  height: calc(100vh - 420px);
+  min-height: 400px;
+  overflow-y: auto;
+  display: block;
+  width: 100%;
+}
+
+.files-table-scroller .vue-recycle-scroller__item-wrapper {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.files-table-scroller .vue-recycle-scroller__item-view {
+  display: table-row;
+}
+
+.files-table-scroller .vue-recycle-scroller__item-view td {
+  display: table-cell;
+}
+
+.files-grid-scroller {
+  height: calc(100vh - 420px);
+  min-height: 400px;
+  overflow-y: auto;
+}
+
+.files-grid-scroller.vue-recycle-scroller {
+  display: grid;
+}
+
+.files-grid-scroller.files-grid--small.vue-recycle-scroller {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.files-grid-scroller.files-grid--medium.vue-recycle-scroller {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.files-grid-scroller.files-grid--large.vue-recycle-scroller {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.files-grid-scroller .vue-recycle-scroller__item-wrapper {
+  display: contents;
+}
+
+.files-grid-scroller .vue-recycle-scroller__item-view {
+  display: block;
+}
+
+/* 平板端优化 (768px - 1100px) */
+@media (max-width: 768px) {
+  .files-toolbar__top,
+  .files-toolbar__bottom {
+    gap: 8px;
+  }
+
+  .files-primary-actions__group {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .files-primary-actions__group .button {
+    font-size: 14px;
+    padding: 8px 12px;
+  }
+
+  .files-controls__view,
+  .files-controls__grid-size {
+    gap: 4px;
+  }
+
+  .files-controls__view .button,
+  .files-controls__grid-size .button {
+    min-width: 36px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+
+  .files-breadcrumb {
+    font-size: 14px;
+    gap: 6px;
+  }
+
+  .files-table {
+    font-size: 14px;
+  }
+
+  .files-table th,
+  .files-table td {
+    padding: 8px 10px;
+  }
+
+  .files-table__actions {
+    font-size: 13px;
+  }
+
+  .files-grid--small {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  }
+
+  .files-grid--medium {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+
+  .files-grid--large {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  }
+
+  .files-grid__card {
+    padding: 8px;
+  }
+
+  .files-selection-toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .files-batch-toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .files-batch-toolbar .button {
+    font-size: 13px;
+    padding: 6px 10px;
+  }
+}
+
+/* 移动端优化 (≤480px) */
+@media (max-width: 480px) {
+  .files-toolbar {
+    --files-search-slot-width: 100%;
+  }
+
+  .files-toolbar__top,
+  .files-toolbar__bottom {
+    gap: 6px;
+  }
+
+  .files-breadcrumb {
+    font-size: 13px;
+    flex-wrap: wrap;
+  }
+
+  .files-breadcrumb__button {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .files-primary-actions__group {
+    width: 100%;
+  }
+
+  .files-primary-actions__group .button {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 13px;
+    padding: 8px 10px;
+  }
+
+  .files-controls__view,
+  .files-controls__grid-size {
+    width: 100%;
+  }
+
+  .files-controls__view .button,
+  .files-controls__grid-size .button {
+    flex: 1;
+  }
+
+  .files-controls__search {
+    width: 100%;
+  }
+
+  .files-controls__search input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* 列表视图：隐藏类型和大小列 */
+  .files-table {
+    font-size: 13px;
+  }
+
+  .files-table th:nth-child(3),
+  .files-table td:nth-child(3),
+  .files-table th:nth-child(5),
+  .files-table td:nth-child(5) {
+    display: none;
+  }
+
+  .files-table th,
+  .files-table td {
+    padding: 6px 8px;
+  }
+
+  .files-table__actions {
+    font-size: 12px;
+  }
+
+  .files-entry-actions__primary {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .files-entry-actions__primary .text-button {
+    font-size: 12px;
+  }
+
+  /* 网格视图：双列布局 */
+  .files-grid--small,
+  .files-grid--medium {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  }
+
+  .files-grid--large {
+    grid-template-columns: 1fr;
+  }
+
+  .files-grid__card {
+    padding: 10px;
+  }
+
+  .files-grid__title {
+    font-size: 14px;
+  }
+
+  /* 选择工具栏 */
+  .files-selection-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .files-selection-toolbar__summary {
+    text-align: center;
+  }
+
+  .files-batch-toolbar {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .files-batch-toolbar .button {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 12px;
+    padding: 6px 8px;
+  }
+
+  /* 对话框优化 */
+  .copy-dialog {
+    width: 100%;
+    max-width: calc(100vw - 20px);
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+  }
+
+  .copy-dialog__header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .copy-dialog__space-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .copy-dialog__toolbar {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .copy-dialog__create {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .copy-dialog__actions {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .copy-dialog__actions .button {
+    flex: 1 1 auto;
+  }
+
+  /* 上传对话框 */
+  .files-upload-dialog__actions {
+    flex-direction: column;
+  }
+
+  .files-upload-dialog__choice {
+    width: 100%;
+  }
+
+  /* 虚拟滚动容器高度调整 */
+  .files-table-scroller,
+  .files-grid-scroller {
+    height: calc(100vh - 500px);
+    min-height: 300px;
+  }
+}
+
+/* 极小屏幕优化 (≤360px) */
+@media (max-width: 360px) {
+  .files-breadcrumb__button {
+    max-width: 80px;
+  }
+
+  .files-primary-actions__group .button {
+    font-size: 12px;
+    padding: 6px 8px;
+  }
+
+  .files-table {
+    font-size: 12px;
+  }
+
+  .files-table th,
+  .files-table td {
+    padding: 4px 6px;
+  }
+
+  /* 网格视图：强制单列 */
+  .files-grid--small,
+  .files-grid--medium,
+  .files-grid--large {
+    grid-template-columns: 1fr;
+  }
+
+  .files-batch-toolbar .button {
+    font-size: 11px;
+    padding: 5px 6px;
+  }
+}
+
+/* 屏幕阅读器专用（视觉隐藏） */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* 键盘焦点增强 */
+.files-table__row:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.files-grid__card:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
 }
 </style>

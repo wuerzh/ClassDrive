@@ -22,12 +22,13 @@
 
 <script setup lang="ts">
 import StatusPill from "@/components/StatusPill.vue";
+import type { StatusPillTone } from "@/types/status-pill";
 
 defineProps<{
   items: Array<{
     label: string;
     value: string;
-    tone?: string;
+    tone?: StatusPillTone;
   }>;
   layout?: "stacked" | "grid";
   testId?: string;

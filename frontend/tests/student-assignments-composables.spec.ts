@@ -1,7 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useStudentAssignments, getStudentAssignmentStatusText } from "@/composables/useStudentAssignments";
 import { useStudentAssignmentDetail } from "@/composables/useStudentAssignmentDetail";
+
+interface DeferredResponse {
+  promise: Promise<Response>;
+  resolve: (payload: unknown) => void;
+}
+
+function deferredResponse(): DeferredResponse {
+  let resolvePromise: (response: Response) => void = () => {};
+  const promise = new Promise<Response>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: (payload: unknown) => {
+      resolvePromise({
+        ok: true,
+        status: 200,
+        json: async () => payload,
+      } as Response);
+    },
+  };
+}
 
 describe("student assignment composables", () => {
   beforeEach(() => {
@@ -147,5 +169,130 @@ describe("student assignment composables", () => {
       "/api/student/assignments/9/submission/files/201",
       expect.objectContaining({ method: "DELETE" }),
     );
+  });
+
+  it("keeps stale assignment list responses from replacing the latest page", async () => {
+    const firstRequest = deferredResponse();
+    const secondRequest = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn()
+      .mockReturnValueOnce(firstRequest.promise)
+      .mockReturnValueOnce(secondRequest.promise));
+
+    const state = useStudentAssignments();
+    const firstLoad = state.loadAssignments({ page: 1 });
+    const secondLoad = state.loadAssignments({ page: 2 });
+
+    secondRequest.resolve({
+      assignments: [
+        {
+          id: 22,
+          classId: 1,
+          title: "第二页作业",
+          description: "",
+          dueAt: "",
+          status: "published",
+          createdAt: "",
+          updatedAt: "",
+          overdue: false,
+          submission: null,
+        },
+      ],
+      pagination: {
+        page: 2,
+        pageSize: 30,
+        total: 31,
+        totalPages: 2,
+      },
+    });
+    await secondLoad;
+
+    firstRequest.resolve({
+      assignments: [
+        {
+          id: 11,
+          classId: 1,
+          title: "第一页旧作业",
+          description: "",
+          dueAt: "",
+          status: "published",
+          createdAt: "",
+          updatedAt: "",
+          overdue: false,
+          submission: null,
+        },
+      ],
+      pagination: {
+        page: 1,
+        pageSize: 30,
+        total: 31,
+        totalPages: 2,
+      },
+    });
+    await firstLoad;
+
+    expect(state.assignments.value.map((assignment) => assignment.id)).toEqual([22]);
+    expect(state.pagination.value.page).toBe(2);
+    expect(state.loading.value).toBe(false);
+  });
+
+  it("keeps stale detail responses from replacing the current assignment", async () => {
+    const firstRequest = deferredResponse();
+    const secondRequest = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn()
+      .mockReturnValueOnce(firstRequest.promise)
+      .mockReturnValueOnce(secondRequest.promise));
+
+    const currentAssignmentId = ref(9);
+    const assignmentId = computed(() => currentAssignmentId.value);
+    const state = useStudentAssignmentDetail(assignmentId);
+    const firstLoad = state.loadAssignment();
+    currentAssignmentId.value = 10;
+    const secondLoad = state.loadAssignment();
+
+    secondRequest.resolve({
+      id: 10,
+      classId: 1,
+      title: "当前作业",
+      description: "",
+      dueAt: "",
+      status: "published",
+      createdAt: "",
+      updatedAt: "",
+      overdue: false,
+      submission: null,
+      submissionConstraints: {
+        allowedTypesLabel: "",
+        maxFileSizeBytes: 0,
+        maxFileSizeLabel: "",
+      },
+      assignmentAttachments: [],
+      items: [],
+    });
+    await secondLoad;
+
+    firstRequest.resolve({
+      id: 9,
+      classId: 1,
+      title: "旧作业",
+      description: "",
+      dueAt: "",
+      status: "published",
+      createdAt: "",
+      updatedAt: "",
+      overdue: false,
+      submission: null,
+      submissionConstraints: {
+        allowedTypesLabel: "",
+        maxFileSizeBytes: 0,
+        maxFileSizeLabel: "",
+      },
+      assignmentAttachments: [],
+      items: [],
+    });
+    await firstLoad;
+
+    expect(state.assignment.value?.id).toBe(10);
+    expect(state.assignment.value?.title).toBe("当前作业");
+    expect(state.loading.value).toBe(false);
   });
 });

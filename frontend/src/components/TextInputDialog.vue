@@ -1,10 +1,18 @@
 <template>
-  <div v-if="open" class="copy-dialog-backdrop" @click.self="emit('cancel')">
+  <div
+    v-if="open"
+    ref="dialogBackdropRef"
+    class="copy-dialog-backdrop"
+    role="dialog"
+    aria-modal="true"
+    :aria-labelledby="`${testIdPrefix}-title`"
+    @click.self="emit('cancel')"
+  >
     <section class="copy-dialog" :data-testid="`${testIdPrefix}-dialog`">
       <div class="copy-dialog__header">
         <div>
           <div class="copy-dialog__eyebrow">{{ eyebrow }}</div>
-          <h3 class="copy-dialog__title">{{ title }}</h3>
+          <h3 :id="`${testIdPrefix}-title`" class="copy-dialog__title">{{ title }}</h3>
         </div>
         <button class="button button--ghost" type="button" :data-testid="`${testIdPrefix}-cancel-top`" @click="emit('cancel')">
           关闭
@@ -41,7 +49,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
+import { useFocusTrap } from "@/composables/useFocusTrap";
 
 const props = withDefaults(defineProps<{
   open: boolean;
@@ -63,6 +72,11 @@ const emit = defineEmits<{
   cancel: [];
   confirm: [value: string];
 }>();
+
+const dialogBackdropRef = ref<HTMLElement | null>(null);
+const openRef = computed(() => props.open);
+
+useFocusTrap(dialogBackdropRef, () => emit("cancel"), openRef);
 
 const draftValue = ref("");
 

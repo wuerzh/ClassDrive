@@ -184,7 +184,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { ElDatePicker } from "element-plus";
 import {
   api,
@@ -195,6 +195,7 @@ import {
 } from "@/api/client";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import PaginationControls from "@/components/PaginationControls.vue";
+import type { StatusPillTone } from "@/types/status-pill";
 import { exportRowsToSpreadsheet } from "@/utils/spreadsheet-export";
 
 const logs = ref<AuditLogItem[]>([]);
@@ -264,7 +265,7 @@ function auditLogTypeLabel(value: AuditLogItem["logType"]): string {
   return "其他";
 }
 
-function auditLogTypeTone(value: AuditLogItem["logType"]): string {
+function auditLogTypeTone(value: AuditLogItem["logType"]): StatusPillTone {
   if (value === "login") {
     return "status-pill--accent";
   }
@@ -276,7 +277,7 @@ function auditLogTypeTone(value: AuditLogItem["logType"]): string {
 
 type AuditActionBadge = {
   label: string;
-  tone: string;
+  tone: StatusPillTone;
 };
 
 function auditActionBadge(action: string): AuditActionBadge | null {
@@ -443,6 +444,14 @@ function exportAuditLogs(): void {
 
 onMounted(() => {
   void loadLogs();
+});
+
+onUnmounted(() => {
+  // Clear pending filter timer to prevent memory leak
+  if (filterTimer !== undefined) {
+    window.clearTimeout(filterTimer);
+    filterTimer = undefined;
+  }
 });
 
 watch(filterSignature, () => {

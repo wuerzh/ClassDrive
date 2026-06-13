@@ -15,7 +15,25 @@ function escapeHtml(value: string | number): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function neutralizeSpreadsheetFormula(value: string | number): string {
+  const text = String(value);
+  const trimmedStart = text.trimStart();
+  if (trimmedStart === "") {
+    return text;
+  }
+  const firstCharacter = trimmedStart[0];
+  if (firstCharacter === "=" || firstCharacter === "+" || firstCharacter === "-" || firstCharacter === "@") {
+    return `'${text}`;
+  }
+  return text;
+}
+
+function spreadsheetCellText(value: string | number): string {
+  return escapeHtml(neutralizeSpreadsheetFormula(value));
 }
 
 function ensureSpreadsheetFileName(fileName: string): string {
@@ -27,11 +45,11 @@ function ensureSpreadsheetFileName(fileName: string): string {
 }
 
 export function exportRowsToSpreadsheet<T>(options: SpreadsheetExportOptions<T>): void {
-  const headerCells = options.columns.map((column) => `<th>${escapeHtml(column.header)}</th>`).join("");
+  const headerCells = options.columns.map((column) => `<th>${spreadsheetCellText(column.header)}</th>`).join("");
   const bodyRows = options.rows
     .map((row) => {
       const cells = options.columns
-        .map((column) => `<td>${escapeHtml(column.value(row))}</td>`)
+        .map((column) => `<td>${spreadsheetCellText(column.value(row))}</td>`)
         .join("");
       return `<tr>${cells}</tr>`;
     })

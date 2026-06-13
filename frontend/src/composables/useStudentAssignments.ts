@@ -30,19 +30,29 @@ export function useStudentAssignments() {
   });
   const loading = ref(true);
   const errorText = ref("");
+  let loadSequence = 0;
 
   async function loadAssignments(options: { page?: number; pageSize?: number } = {}) {
+    const requestSequence = ++loadSequence;
     loading.value = true;
     errorText.value = "";
     try {
       const response = await api.studentAssignments(options);
+      if (requestSequence !== loadSequence) {
+        return;
+      }
       assignments.value = response.assignments ?? [];
       submissionConstraints.value = response.submissionConstraints ?? submissionConstraints.value;
       pagination.value = response.pagination ?? pagination.value;
     } catch (error) {
+      if (requestSequence !== loadSequence) {
+        return;
+      }
       errorText.value = error instanceof ApiError ? error.message : "加载作业失败";
     } finally {
-      loading.value = false;
+      if (requestSequence === loadSequence) {
+        loading.value = false;
+      }
     }
   }
 

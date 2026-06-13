@@ -12,6 +12,7 @@ describe("StatusPill", () => {
     });
 
     expect(wrapper.text()).toBe("已发布");
+    expect(wrapper.attributes("role")).toBe("status");
     expect(wrapper.classes()).toContain("status-pill");
     expect(wrapper.classes()).toContain("status-pill--success");
   });

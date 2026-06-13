@@ -29,9 +29,10 @@ describe("shared styles", () => {
 
   it("keeps toasts above the sticky topbar but below modal dialogs", () => {
     const css = readFileSync(stylesPath, "utf8");
+    const toastStack = readFileSync(resolve(sourceRoot, "components", "ToastStack.vue"), "utf8");
 
     expect(css).toMatch(/\.topbar\s*\{[\s\S]*?z-index:\s*1000;/);
-    expect(css).toMatch(/\.toast-stack\s*\{[\s\S]*?z-index:\s*2100;/);
+    expect(toastStack).toMatch(/\.toast-stack\s*\{[\s\S]*?z-index:\s*2100;/);
     expect(css).toMatch(/\.copy-dialog-backdrop\s*\{[\s\S]*?z-index:\s*5000;/);
   });
 
@@ -240,7 +241,7 @@ describe("shared styles", () => {
   it("keeps confirmation dialogs above ordinary edit dialogs", () => {
     const confirmDialog = readFileSync(resolve(sourceRoot, "components", "ConfirmDialog.vue"), "utf8");
 
-    expect(confirmDialog).toContain('@click.self="$emit(\'cancel\')"');
+    expect(confirmDialog).toContain('@click.self="handleCancel"');
     expect(confirmDialog).toMatch(/\.copy-dialog-backdrop\s*\{[\s\S]*?z-index:\s*5200;/);
   });
 
@@ -253,6 +254,7 @@ describe("shared styles", () => {
 
   it("defines dark native controls and warning feedback tones", () => {
     const css = readFileSync(stylesPath, "utf8");
+    const toastStack = readFileSync(resolve(sourceRoot, "components", "ToastStack.vue"), "utf8");
     const statusPillRule = css.match(/\.status-pill\s*\{[^}]*\}/)?.[0] ?? "";
 
     expect(css).toMatch(/\.app-datetime-input\s*\{[\s\S]*?color-scheme:\s*light;/);
@@ -265,7 +267,7 @@ describe("shared styles", () => {
     expect(css).toMatch(/:root\.dark\s+\.classdrive-date-picker\.el-popper[\s\S]*?background:\s*var\(--popover-bg\);/);
     expect(css).toMatch(/\.students-page__file-input::file-selector-button\s*\{/);
     expect(css).toMatch(/:root\.dark\s+\.students-page__file-input::file-selector-button\s*\{/);
-    expect(css).toMatch(/\.toast--warning\s*\{/);
+    expect(toastStack).toMatch(/\.toast--warning\s*\{/);
     expect(css).toMatch(/\.status-pill--warning\s*\{/);
     expect(statusPillRule).toMatch(/width:\s*fit-content;/);
     expect(statusPillRule).toMatch(/white-space:\s*nowrap;/);

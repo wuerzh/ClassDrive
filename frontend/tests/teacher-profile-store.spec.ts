@@ -18,6 +18,7 @@ describe("teacher profile store", () => {
       displayName: "旧名字",
       role: "staff",
     };
+    const syncUserProfileSpy = vi.spyOn(authStore, "syncUserProfile");
     const teacherProfileStore = useTeacherProfileStore();
     vi.spyOn(api, "profileSettings").mockResolvedValue({
       profile: {
@@ -41,6 +42,10 @@ describe("teacher profile store", () => {
       },
     });
 
+    expect(syncUserProfileSpy).toHaveBeenCalledWith({
+      displayName: "新名字",
+      role: "owner",
+    });
     expect(authStore.user?.displayName).toBe("新名字");
     expect(authStore.user?.role).toBe("owner");
   });

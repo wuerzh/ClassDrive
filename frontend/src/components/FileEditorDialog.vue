@@ -1,7 +1,11 @@
 <template>
   <div
     v-if="item"
+    ref="dialogBackdropRef"
     class="editor-dialog-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="file-editor-title"
     data-testid="file-editor-dialog"
     @click.self="handleClose"
   >
@@ -9,7 +13,7 @@
       <header class="editor-dialog__header">
         <div>
           <div class="editor-dialog__eyebrow">在线编辑</div>
-          <h3 class="editor-dialog__title" data-testid="file-editor-title">{{ item.name }}</h3>
+          <h3 id="file-editor-title" class="editor-dialog__title" data-testid="file-editor-title">{{ item.name }}</h3>
         </div>
         <div class="editor-dialog__header-actions">
           <div
@@ -90,6 +94,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useFocusTrap } from "@/composables/useFocusTrap";
 
 import type { FileItem } from "@/api/client";
 
@@ -109,7 +114,12 @@ const emit = defineEmits<{
   "update:content": [value: string];
 }>();
 
+const dialogBackdropRef = ref<HTMLElement | null>(null);
 const mode = ref<"edit" | "preview">("edit");
+
+const isOpen = computed(() => props.item !== null);
+
+useFocusTrap(dialogBackdropRef, () => handleClose(), isOpen);
 
 const showMarkdownPreview = computed(() => {
   if (!props.item) {

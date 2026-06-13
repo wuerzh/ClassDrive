@@ -31,10 +31,10 @@ export const useTeacherProfileStore = defineStore("teacher-profile", {
     apply(profile: TeacherProfile) {
       this.profile = cloneProfile(profile);
       const authStore = useAuthStore();
-      if (authStore.user) {
-        authStore.user.displayName = profile.displayName;
-        authStore.user.role = profile.role;
-      }
+      authStore.syncUserProfile({
+        displayName: profile.displayName,
+        role: profile.role,
+      });
     },
     async load(force = false) {
       if (this.profile && !force) {

@@ -4823,8 +4823,8 @@ describe("FilesView", () => {
     const actionMenu = wrapper.get('[data-testid="row-secondary-actions-1300"]');
     expect(actionMenu.text()).toContain("复制");
     expect(actionMenu.text()).toContain("移动");
+    expect(actionMenu.text()).toContain("分享");
     expect(actionMenu.text()).toContain("重命名");
     expect(actionMenu.text()).toContain("删除");
-    expect(actionMenu.text()).not.toContain("分享");
   });
 });

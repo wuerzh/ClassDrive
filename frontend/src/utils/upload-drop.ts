@@ -1,4 +1,5 @@
 import type { UploadFileItem } from "@/api/client";
+import { filterRedundantDirectoryArchives } from "@/utils/upload-items";
 
 interface DragEntryReader {
   readEntries(callback: (entries: DragEntry[]) => void): void;
@@ -64,5 +65,7 @@ export async function collectDroppedUploadItems(dataTransfer: DataTransfer): Pro
     droppedItems.push(...(await collectEntry(entry)));
   }
 
-  return droppedItems.length > 0 ? droppedItems : Array.from(dataTransfer.files ?? []).map((file) => ({ file }));
+  return droppedItems.length > 0
+    ? filterRedundantDirectoryArchives(droppedItems)
+    : Array.from(dataTransfer.files ?? []).map((file) => ({ file }));
 }

@@ -1,10 +1,14 @@
 <template>
   <div
     v-if="item"
+    ref="dialogBackdropRef"
     class="preview-dialog-backdrop"
     :class="{ 'preview-dialog-backdrop--maximized': isMaximized }"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="file-preview-title"
     data-testid="file-preview-dialog"
-    @click.self="$emit('close')"
+    @click.self="emit('close')"
   >
     <section
       class="preview-dialog"
@@ -14,7 +18,7 @@
       <header class="preview-dialog__header">
         <div>
           <div class="preview-dialog__eyebrow">文件预览</div>
-          <h3 class="preview-dialog__title">{{ item.name }}</h3>
+          <h3 id="file-preview-title" class="preview-dialog__title">{{ item.name }}</h3>
         </div>
         <div class="preview-dialog__actions">
           <button
@@ -81,7 +85,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
+import { useFocusTrap } from "@/composables/useFocusTrap";
 import type { FilePreviewKind } from "@/utils/file-preview";
 
 interface PreviewDialogItem {
@@ -107,14 +112,19 @@ const props = withDefaults(defineProps<{
   hasNext: false,
 });
 
-defineEmits<{
+const emit = defineEmits<{
   close: [];
   edit: [];
   previous: [];
   next: [];
 }>();
 
+const dialogBackdropRef = ref<HTMLElement | null>(null);
 const isMaximized = ref(false);
+
+const isOpen = computed(() => props.item !== null);
+
+useFocusTrap(dialogBackdropRef, () => emit("close"), isOpen);
 
 function toggleMaximized(): void {
   isMaximized.value = !isMaximized.value;

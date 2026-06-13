@@ -19,6 +19,7 @@
 
 <script setup lang="ts">
 import StatusPill from "@/components/StatusPill.vue";
+import type { StatusPillTone } from "@/types/status-pill";
 
 defineProps<{
   title: string;
@@ -26,7 +27,7 @@ defineProps<{
   details: Array<{
     label: string;
     value: string;
-    tone?: string;
+    tone?: StatusPillTone;
   }>;
   testId?: string;
   detailsTestId?: string;

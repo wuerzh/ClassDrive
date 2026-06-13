@@ -1,3 +1,5 @@
+import type { StatusPillTone } from "@/types/status-pill";
+
 export const uiCopy = {
   emptyAssignmentDescription: "暂无作业说明",
   emptyValue: "未设置",
@@ -26,7 +28,7 @@ export function assignmentStatusLabel(status: "draft" | "published") {
   return status === "published" ? "已发布" : "未发布";
 }
 
-export function assignmentStatusTone(status: "draft" | "published") {
+export function assignmentStatusTone(status: "draft" | "published"): StatusPillTone {
   return status === "published" ? "status-pill--success" : "status-pill--warning";
 }
 
@@ -66,7 +68,7 @@ export function studentAssignmentStatusLabel(assignment: StudentAssignmentStatus
   return "未提交";
 }
 
-export function studentAssignmentStatusTone(assignment: StudentAssignmentStatusInput) {
+export function studentAssignmentStatusTone(assignment: StudentAssignmentStatusInput): StatusPillTone {
   if (assignment.submission?.status === "partial") {
     return "status-pill--warning";
   }
@@ -86,7 +88,7 @@ export function submissionStatusLabel(status: "partial" | "submitted") {
   return status === "partial" ? "待补齐" : "已提交";
 }
 
-export function submissionStatusTone(status: "partial" | "submitted") {
+export function submissionStatusTone(status: "partial" | "submitted"): StatusPillTone {
   return status === "partial" ? "status-pill--warning" : "status-pill--success";
 }
 

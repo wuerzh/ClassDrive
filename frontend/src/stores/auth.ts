@@ -31,6 +31,16 @@ export const useAuthStore = defineStore("auth", {
       this.user = null;
       this.initialized = true;
     },
+    syncUserProfile(profile: Pick<SessionUser, "displayName" | "role">) {
+      if (!this.user) {
+        return;
+      }
+      this.user = {
+        ...this.user,
+        displayName: profile.displayName,
+        role: profile.role,
+      };
+    },
   },
 });
 

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -359,6 +360,146 @@ func TestTeacherLoginSessionAndLogout(t *testing.T) {
 	}
 }
 
+func TestLoginSetsStrictSessionAndCSRFCookies(t *testing.T) {
+	t.Parallel()
+
+	_, handler := newStrictCSRFTestServer(t)
+
+	loginRecorder := httptest.NewRecorder()
+	loginRequest := httptest.NewRequest(http.MethodPost, "https://example.com/api/auth/login", jsonBody(t, map[string]string{
+		"username": "admin",
+		"password": "demo123",
+	}))
+	loginRequest.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(loginRecorder, loginRequest)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("expected login status 200, got %d: %s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+
+	sessionCookie := findCookie(t, loginRecorder.Result().Cookies(), sessionCookieName)
+	if !sessionCookie.HttpOnly {
+		t.Fatalf("expected session cookie to be http-only")
+	}
+	if !sessionCookie.Secure {
+		t.Fatalf("expected session cookie to be secure for HTTPS requests")
+	}
+	if sessionCookie.SameSite != http.SameSiteStrictMode {
+		t.Fatalf("expected session cookie SameSite=Strict, got %v", sessionCookie.SameSite)
+	}
+
+	csrfCookie := findCookie(t, loginRecorder.Result().Cookies(), csrfCookieName)
+	if csrfCookie.HttpOnly {
+		t.Fatalf("expected csrf cookie to be readable by the frontend")
+	}
+	if !csrfCookie.Secure {
+		t.Fatalf("expected csrf cookie to be secure for HTTPS requests")
+	}
+	if csrfCookie.SameSite != http.SameSiteStrictMode {
+		t.Fatalf("expected csrf cookie SameSite=Strict, got %v", csrfCookie.SameSite)
+	}
+	if strings.TrimSpace(csrfCookie.Value) == "" {
+		t.Fatalf("expected csrf cookie value")
+	}
+}
+
+func TestCSRFRejectsBrowserWriteWithoutTokenAndAllowsMatchingToken(t *testing.T) {
+	t.Parallel()
+
+	_, handler := newStrictCSRFTestServer(t)
+	loginRecorder := httptest.NewRecorder()
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/auth/login", jsonBody(t, map[string]string{
+		"username": "admin",
+		"password": "demo123",
+	}))
+	loginRequest.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(loginRecorder, loginRequest)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("expected login status 200, got %d: %s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	cookies := loginRecorder.Result().Cookies()
+	sessionCookie := findCookie(t, cookies, sessionCookieName)
+	csrfCookie := findCookie(t, cookies, csrfCookieName)
+
+	missingTokenRecorder := httptest.NewRecorder()
+	missingTokenRequest := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	missingTokenRequest.Header.Set("Origin", "http://example.com")
+	missingTokenRequest.AddCookie(sessionCookie)
+	missingTokenRequest.AddCookie(csrfCookie)
+	handler.ServeHTTP(missingTokenRecorder, missingTokenRequest)
+	if missingTokenRecorder.Code != http.StatusForbidden {
+		t.Fatalf("expected missing csrf token 403, got %d: %s", missingTokenRecorder.Code, missingTokenRecorder.Body.String())
+	}
+
+	logoutRecorder := httptest.NewRecorder()
+	logoutRequest := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	logoutRequest.Header.Set("Origin", "http://example.com")
+	logoutRequest.Header.Set(csrfHeaderName, csrfCookie.Value)
+	logoutRequest.AddCookie(sessionCookie)
+	logoutRequest.AddCookie(csrfCookie)
+	handler.ServeHTTP(logoutRecorder, logoutRequest)
+	if logoutRecorder.Code != http.StatusOK {
+		t.Fatalf("expected matching csrf token logout 200, got %d: %s", logoutRecorder.Code, logoutRecorder.Body.String())
+	}
+}
+
+func TestCSRFRejectsCrossSiteBrowserWrite(t *testing.T) {
+	t.Parallel()
+
+	_, handler := newStrictCSRFTestServer(t)
+	cookie := loginAndGetCookie(t, handler)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	request.Header.Set("Origin", "http://attacker.example")
+	request.AddCookie(cookie)
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected cross-site request 403, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestCSRFRejectsWriteWithoutTokenEvenWithoutBrowserOriginHeaders(t *testing.T) {
+	t.Parallel()
+
+	_, handler := newStrictCSRFTestServer(t)
+	loginRecorder := httptest.NewRecorder()
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/auth/login", jsonBody(t, map[string]string{
+		"username": "admin",
+		"password": "demo123",
+	}))
+	loginRequest.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(loginRecorder, loginRequest)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("expected login status 200, got %d: %s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	sessionCookie := findCookie(t, loginRecorder.Result().Cookies(), sessionCookieName)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	request.AddCookie(sessionCookie)
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected missing csrf token 403 without browser origin headers, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestInternalServerErrorResponseIsSanitized(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	recorder := httptest.NewRecorder()
+	app.writeError(recorder, http.StatusInternalServerError, "server_error", "sqlite secret path C:/private/classdrive.db")
+
+	var payload apiErrorResponse
+	decodeJSON(t, recorder.Body, &payload)
+	if payload.Error.Message != serverErrorMessage {
+		t.Fatalf("expected sanitized server error message, got %#v", payload.Error)
+	}
+	if strings.Contains(payload.Error.Message, "sqlite") || strings.Contains(payload.Error.Message, "C:/private") {
+		t.Fatalf("expected internal details to be hidden, got %q", payload.Error.Message)
+	}
+}
+
 func TestDefaultTeacherSeedUsesAdminAccount(t *testing.T) {
 	t.Parallel()
 
@@ -416,6 +557,7 @@ func TestTeacherLoginInvalidatesPreviousSessionAndRecordsLoginLogs(t *testing.T)
 		"username": "admin",
 		"password": "wrong-password",
 	}))
+	failedLoginRequest.RemoteAddr = "203.0.113.20:54001"
 	failedLoginRequest.Header.Set("Content-Type", "application/json")
 	failedLoginRequest.Header.Set("X-Forwarded-For", "192.0.2.10")
 	app.ServeHTTP(failedLoginRecorder, failedLoginRequest)
@@ -555,6 +697,7 @@ func TestSystemSettingsPortChangePreparesAndCommitsRuntimePort(t *testing.T) {
 		t.Fatalf("new server: %v", err)
 	}
 	app := handler.(*App)
+	app.disableCSRFForTests = true
 	t.Cleanup(func() {
 		if err := app.Close(); err != nil {
 			t.Fatalf("close app: %v", err)
@@ -603,6 +746,7 @@ func TestSystemSettingsPortChangeFailureKeepsPreviousPort(t *testing.T) {
 		t.Fatalf("new server: %v", err)
 	}
 	app := handler.(*App)
+	app.disableCSRFForTests = true
 	t.Cleanup(func() {
 		if err := app.Close(); err != nil {
 			t.Fatalf("close app: %v", err)
@@ -838,6 +982,7 @@ func TestAuditLogsSupportFilters(t *testing.T) {
 		"username": "admin",
 		"password": "wrong-password",
 	}))
+	failedLoginRequest.RemoteAddr = "203.0.113.20:54001"
 	failedLoginRequest.Header.Set("Content-Type", "application/json")
 	failedLoginRequest.Header.Set("X-Forwarded-For", "192.0.2.10")
 	app.ServeHTTP(failedLoginRecorder, failedLoginRequest)
@@ -846,7 +991,7 @@ func TestAuditLogsSupportFilters(t *testing.T) {
 	}
 
 	loginLogsRecorder := httptest.NewRecorder()
-	loginLogsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/login-logs?actorType=teacher&status=failure&q=admin&ip=192.0.2.10", nil)
+	loginLogsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/login-logs?actorType=teacher&status=failure&q=admin&ip=203.0.113.20", nil)
 	loginLogsRequest.AddCookie(cookie)
 	app.ServeHTTP(loginLogsRecorder, loginLogsRequest)
 	if loginLogsRecorder.Code != http.StatusOK {
@@ -862,6 +1007,7 @@ func TestAuditLogsSupportFilters(t *testing.T) {
 	createRequest := httptest.NewRequest(http.MethodPost, "/api/classes", jsonBody(t, map[string]string{
 		"name": "筛选测试班",
 	}))
+	createRequest.RemoteAddr = "203.0.113.20:54002"
 	createRequest.Header.Set("Content-Type", "application/json")
 	createRequest.Header.Set("X-Forwarded-For", "192.0.2.10")
 	createRequest.AddCookie(cookie)
@@ -871,7 +1017,7 @@ func TestAuditLogsSupportFilters(t *testing.T) {
 	}
 
 	operationLogsRecorder := httptest.NewRecorder()
-	operationLogsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/operation-logs?actorType=teacher&method=POST&q=classes&ip=192.0.2.10", nil)
+	operationLogsRequest := httptest.NewRequest(http.MethodGet, "/api/audit/operation-logs?actorType=teacher&method=POST&q=classes&ip=203.0.113.20", nil)
 	operationLogsRequest.AddCookie(cookie)
 	app.ServeHTTP(operationLogsRecorder, operationLogsRequest)
 	if operationLogsRecorder.Code != http.StatusOK {
@@ -882,7 +1028,7 @@ func TestAuditLogsSupportFilters(t *testing.T) {
 	if len(operationLogs.Logs) != 1 || operationLogs.Logs[0].Method != http.MethodPost || operationLogs.Logs[0].Path != "/api/classes" {
 		t.Fatalf("unexpected filtered operation logs %#v", operationLogs.Logs)
 	}
-	if operationLogs.Logs[0].IPAddress != "192.0.2.10" {
+	if operationLogs.Logs[0].IPAddress != "203.0.113.20" {
 		t.Fatalf("expected filtered operation log IP address, got %#v", operationLogs.Logs[0])
 	}
 }
@@ -902,6 +1048,48 @@ func TestOperationLogSummaryUsesReadableFallbacks(t *testing.T) {
 	}
 	if actual := operationLogSummary(http.MethodPost, "/api/unknown/path"); strings.Contains(actual, "/api/") {
 		t.Fatalf("expected readable fallback without API path, got %q", actual)
+	}
+}
+
+func TestClientIPAddressOnlyTrustsConfiguredProxyHeaders(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/session", nil)
+	request.RemoteAddr = "203.0.113.20:54321"
+	request.Header.Set("X-Forwarded-For", "192.0.2.10")
+
+	t.Setenv("CLASSDRIVE_TRUSTED_PROXIES", "")
+	if got := clientIPAddress(request); got != "203.0.113.20" {
+		t.Fatalf("expected remote address when proxy is not trusted, got %q", got)
+	}
+
+	t.Setenv("CLASSDRIVE_TRUSTED_PROXIES", "203.0.113.20")
+	if got := clientIPAddress(request); got != "192.0.2.10" {
+		t.Fatalf("expected forwarded address from trusted proxy, got %q", got)
+	}
+}
+
+func TestAuditLogWriteFailuresAreLogged(t *testing.T) {
+	_, app := newTestServer(t)
+	if err := app.db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	var logBuffer bytes.Buffer
+	originalOutput := log.Writer()
+	log.SetOutput(&logBuffer)
+	t.Cleanup(func() {
+		log.SetOutput(originalOutput)
+	})
+
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	app.recordLoginLog(request, "teacher", 1, "admin", "管理员", "failure", "测试写入失败")
+	app.recordOperationLog(request, "teacher", 1, "管理员", http.StatusInternalServerError)
+
+	logText := logBuffer.String()
+	if !strings.Contains(logText, "record login log") {
+		t.Fatalf("expected login log write failure to be logged, got %q", logText)
+	}
+	if !strings.Contains(logText, "record operation log") {
+		t.Fatalf("expected operation log write failure to be logged, got %q", logText)
 	}
 }
 
@@ -1427,6 +1615,49 @@ func TestTeacherResetStudentPasswordRequiresPasswordChange(t *testing.T) {
 	decodeJSON(t, sessionRecorder.Body, &sessionPayload)
 	if sessionPayload.User.MustChangePassword {
 		t.Fatalf("expected new password login not to require change, got %#v", sessionPayload.User)
+	}
+}
+
+func TestStudentResetPasswordCanBeOverriddenByEnvironment(t *testing.T) {
+	t.Setenv("CLASSDRIVE_DEFAULT_STUDENT_RESET_PASSWORD", "reset987")
+
+	_, app := newTestServer(t)
+	prepareStudentAuthFixture(t, app, "ABCD1234", "20260001", "张小明")
+	teacherCookie := loginAndGetCookie(t, app)
+
+	resetRecorder := httptest.NewRecorder()
+	resetRequest := httptest.NewRequest(http.MethodPost, "/api/students/1/reset-password", nil)
+	resetRequest.AddCookie(teacherCookie)
+	app.ServeHTTP(resetRecorder, resetRequest)
+	if resetRecorder.Code != http.StatusOK {
+		t.Fatalf("expected reset password 200, got %d: %s", resetRecorder.Code, resetRecorder.Body.String())
+	}
+	var resetPayload studentPasswordResetResult
+	decodeJSON(t, resetRecorder.Body, &resetPayload)
+	if resetPayload.DefaultPassword != "reset987" {
+		t.Fatalf("expected override reset password in response, got %#v", resetPayload)
+	}
+
+	resetLoginRecorder := httptest.NewRecorder()
+	resetLoginRequest := httptest.NewRequest(http.MethodPost, "/api/student/auth/login", jsonBody(t, map[string]any{
+		"studentNo": "20260001",
+		"password":  "reset987",
+	}))
+	resetLoginRequest.Header.Set("Content-Type", "application/json")
+	app.ServeHTTP(resetLoginRecorder, resetLoginRequest)
+	if resetLoginRecorder.Code != http.StatusOK {
+		t.Fatalf("expected override reset password login 200, got %d: %s", resetLoginRecorder.Code, resetLoginRecorder.Body.String())
+	}
+
+	builtInLoginRecorder := httptest.NewRecorder()
+	builtInLoginRequest := httptest.NewRequest(http.MethodPost, "/api/student/auth/login", jsonBody(t, map[string]any{
+		"studentNo": "20260001",
+		"password":  "123456",
+	}))
+	builtInLoginRequest.Header.Set("Content-Type", "application/json")
+	app.ServeHTTP(builtInLoginRecorder, builtInLoginRequest)
+	if builtInLoginRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected built-in reset password to fail after override, got %d: %s", builtInLoginRecorder.Code, builtInLoginRecorder.Body.String())
 	}
 }
 
@@ -1965,6 +2196,90 @@ func TestFilesListAndSearchSupportSortAndPagination(t *testing.T) {
 	}
 	if len(searched.Items) != 1 || searched.Items[0].Name != "lesson-b.txt" {
 		t.Fatalf("unexpected paged search items %#v", searched.Items)
+	}
+}
+
+func TestListFileEntriesPagePaginatesBeforeReturningRows(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+
+	if _, err := app.createFolder("library", nil, "/", "SQL分页"); err != nil {
+		t.Fatalf("create root folder: %v", err)
+	}
+	if _, err := app.createFolder("library", nil, "/SQL分页", "资料夹"); err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+	if _, err := app.createFile("library", nil, "/SQL分页/资料夹", "nested-large.bin", strings.NewReader(strings.Repeat("x", 4096))); err != nil {
+		t.Fatalf("create nested folder file: %v", err)
+	}
+	for _, name := range []string{"alpha.txt", "beta.txt", "gamma.txt"} {
+		if _, err := app.createFile("library", nil, "/SQL分页", name, strings.NewReader(name)); err != nil {
+			t.Fatalf("create file %s: %v", name, err)
+		}
+	}
+
+	query := teacherListQuery{
+		Sort:     "name-asc",
+		Page:     2,
+		PageSize: 2,
+		Offset:   2,
+		Paged:    true,
+	}
+	items, pagination, err := app.listFileEntriesPage("library", nil, "/SQL分页", query)
+	if err != nil {
+		t.Fatalf("list file entries page: %v", err)
+	}
+	if pagination.Page != 2 || pagination.PageSize != 2 || pagination.Total != 4 || pagination.TotalPages != 2 {
+		t.Fatalf("unexpected pagination %#v", pagination)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected only the requested page rows, got %#v", items)
+	}
+	if items[0].Name != "gamma.txt" || items[1].Name != "资料夹" {
+		t.Fatalf("unexpected page order %#v", items)
+	}
+
+	sizeQuery := teacherListQuery{
+		Sort:     "size-desc",
+		Page:     1,
+		PageSize: 2,
+		Offset:   0,
+		Paged:    true,
+	}
+	sizeSorted, _, err := app.listFileEntriesPage("library", nil, "/SQL分页", sizeQuery)
+	if err != nil {
+		t.Fatalf("list size sorted page: %v", err)
+	}
+	if len(sizeSorted) != 2 || sizeSorted[0].Name != "资料夹" || sizeSorted[0].Size != 4096 {
+		t.Fatalf("expected recursive folder size to participate in SQL paging, got %#v", sizeSorted)
+	}
+}
+
+func TestApplyFileEntryFolderSizesUsesBatchQuery(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("read server.go: %v", err)
+	}
+	if bytes.Contains(source, []byte("fileEntryFolderSize(entries[index])")) {
+		t.Fatalf("applyFileEntryFolderSizes should not query once per directory")
+	}
+}
+
+func TestFileArchivesStreamZipPayloads(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("read server.go: %v", err)
+	}
+	if bytes.Contains(source, []byte("func (app *App) buildDirectoryArchive(entry *fileEntry) ([]byte, error)")) {
+		t.Fatalf("directory archives should stream to an io.Writer instead of returning []byte")
+	}
+	if bytes.Contains(source, []byte("func (app *App) buildFileEntriesArchive(entries []fileEntry) ([]byte, error)")) {
+		t.Fatalf("batch file archives should stream to an io.Writer instead of returning []byte")
 	}
 }
 
@@ -3960,7 +4275,7 @@ create table public_shares (
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read pragma rows: %v", err)
 	}
-	if len(columns) != 4 || columns[0] != "id" || columns[1] != "upload_panel_enabled" || columns[2] != "single_account_login_enabled" || columns[3] != "server_port" {
+	if len(columns) != 5 || columns[0] != "id" || columns[1] != "upload_panel_enabled" || columns[2] != "single_account_login_enabled" || columns[3] != "server_port" || columns[4] != "default_share_expires_days" {
 		t.Fatalf("unexpected migrated system_settings columns %#v", columns)
 	}
 
@@ -3977,6 +4292,9 @@ create table public_shares (
 	if settings.ServerPort != "80" {
 		t.Fatalf("expected migrated system settings to use default port, got %#v", settings)
 	}
+	if settings.DefaultShareExpiresDays != 7 {
+		t.Fatalf("expected migrated default share expiry 7, got %#v", settings)
+	}
 
 	for _, tableName := range []string{"file_shares", "public_shares"} {
 		var count int
@@ -3986,6 +4304,56 @@ create table public_shares (
 		if count != 0 {
 			t.Fatalf("expected legacy table %s to be removed, count=%d", tableName, count)
 		}
+	}
+}
+
+func TestEnsureColumnsAddsOnlyMissingColumns(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	if _, err := app.db.Exec(`create table schema_ensure_test (
+  id integer primary key,
+  existing text not null default 'old'
+)`); err != nil {
+		t.Fatalf("create schema ensure fixture: %v", err)
+	}
+	if _, err := app.db.Exec(`insert into schema_ensure_test (id, existing) values (1, 'keep')`); err != nil {
+		t.Fatalf("seed schema ensure fixture: %v", err)
+	}
+
+	columns := []columnDef{
+		{Name: "existing", AlterSQL: `alter table schema_ensure_test add column existing text not null default 'duplicate'`},
+		{Name: "added", AlterSQL: `alter table schema_ensure_test add column added integer not null default 7`},
+	}
+	if err := app.ensureColumns("schema_ensure_test", columns); err != nil {
+		t.Fatalf("ensure columns: %v", err)
+	}
+	if err := app.ensureColumns("schema_ensure_test", columns); err != nil {
+		t.Fatalf("ensure columns idempotently: %v", err)
+	}
+
+	var existing string
+	var added int
+	if err := app.db.QueryRow(`select existing, added from schema_ensure_test where id = 1`).Scan(&existing, &added); err != nil {
+		t.Fatalf("query ensured columns: %v", err)
+	}
+	if existing != "keep" || added != 7 {
+		t.Fatalf("unexpected ensured values existing=%q added=%d", existing, added)
+	}
+}
+
+func TestEnsureColumnsRejectsInvalidTableIdentifier(t *testing.T) {
+	t.Parallel()
+
+	_, app := newTestServer(t)
+	err := app.ensureColumns("schema_ensure_test;drop table teachers", []columnDef{
+		{Name: "added", AlterSQL: `alter table teachers add column added integer not null default 0`},
+	})
+	if err == nil {
+		t.Fatalf("expected invalid table identifier error")
+	}
+	if !strings.Contains(err.Error(), "invalid sqlite table identifier") {
+		t.Fatalf("expected invalid identifier error, got %v", err)
 	}
 }
 
@@ -4283,6 +4651,26 @@ func TestSeededTeacherPasswordUsesStrongHash(t *testing.T) {
 	}
 	if err := verifyPasswordHash(teacher.PasswordHash, "wrong-password"); err == nil {
 		t.Fatalf("expected wrong password verification to fail")
+	}
+}
+
+func TestSeededTeacherPasswordCanBeOverriddenByEnvironment(t *testing.T) {
+	t.Setenv("CLASSDRIVE_DEFAULT_TEACHER_PASSWORD", "admin987")
+
+	_, app := newTestServer(t)
+
+	teacher, err := app.findTeacherByUsername("admin")
+	if err != nil {
+		t.Fatalf("find teacher: %v", err)
+	}
+	if teacher == nil {
+		t.Fatalf("expected seeded teacher")
+	}
+	if err := verifyPasswordHash(teacher.PasswordHash, "admin987"); err != nil {
+		t.Fatalf("expected override password to verify: %v", err)
+	}
+	if err := verifyPasswordHash(teacher.PasswordHash, "demo123"); err == nil {
+		t.Fatalf("expected built-in default password to fail after override")
 	}
 }
 
@@ -4704,6 +5092,48 @@ func TestClassManagementCreateAndJoinCodeFlow(t *testing.T) {
 	}
 	if createdAfterCode.RegistrationExpiresAt != "" {
 		t.Fatalf("expected expiration cleared after closing registration, got %#v", createdAfterCode)
+	}
+}
+
+func TestGenerateJoinCodeUsesCryptoRandIntForEachDigit(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("read server.go: %v", err)
+	}
+	body := string(source)
+	functionStart := strings.Index(body, "func generateJoinCode()")
+	if functionStart < 0 {
+		t.Fatalf("generateJoinCode function not found")
+	}
+	functionEnd := strings.Index(body[functionStart:], "\nfunc hashPassword")
+	if functionEnd < 0 {
+		t.Fatalf("generateJoinCode function end not found")
+	}
+	functionBody := body[functionStart : functionStart+functionEnd]
+	if !strings.Contains(functionBody, "rand.Int(") {
+		t.Fatalf("generateJoinCode should use crypto/rand.Int to avoid modulo bias")
+	}
+	if strings.Contains(functionBody, "%len(alphabet)") || strings.Contains(functionBody, "% len(alphabet)") {
+		t.Fatalf("generateJoinCode should not reduce random bytes with modulo")
+	}
+}
+
+func TestGenerateJoinCodeReturnsFourDigits(t *testing.T) {
+	t.Parallel()
+
+	code, err := generateJoinCode()
+	if err != nil {
+		t.Fatalf("generate join code: %v", err)
+	}
+	if len(code) != classJoinCodeLen {
+		t.Fatalf("expected join code length %d, got %q", classJoinCodeLen, code)
+	}
+	for _, digit := range code {
+		if digit < '0' || digit > '9' {
+			t.Fatalf("expected numeric join code, got %q", code)
+		}
 	}
 }
 
@@ -7825,6 +8255,13 @@ func TestFrontendShareRouteReturnsNotFound(t *testing.T) {
 }
 
 func newTestServer(t *testing.T) (string, *App) {
+	t.Helper()
+	baseDir, app := newStrictCSRFTestServer(t)
+	app.disableCSRFForTests = true
+	return baseDir, app
+}
+
+func newStrictCSRFTestServer(t *testing.T) (string, *App) {
 	t.Helper()
 	baseDir := t.TempDir()
 	handler, err := New(Config{

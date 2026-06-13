@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"embed"
 	"encoding/base64"
@@ -15,6 +16,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
+	"math/big"
 	"mime"
 	"mime/multipart"
 	"net"
@@ -26,6 +29,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -36,6 +40,11 @@ import (
 const (
 	sessionCookieName                   = "classdrive_session"
 	studentSessionCookieName            = "classdrive_student_session"
+	csrfCookieName                      = "classdrive_csrf"
+	csrfHeaderName                      = "X-CSRF-Token"
+	defaultTeacherPasswordEnv           = "CLASSDRIVE_DEFAULT_TEACHER_PASSWORD"
+	defaultStudentResetPasswordEnv      = "CLASSDRIVE_DEFAULT_STUDENT_RESET_PASSWORD"
+	serverErrorMessage                  = "服务器内部错误"
 	sessionDuration                     = 24 * time.Hour
 	DefaultTeacherUsername              = "admin"
 	DefaultTeacherPassword              = "demo123"
@@ -66,6 +75,28 @@ const (
 	defaultTeacherListPageSize          = 30
 	maxTeacherListPageSize              = 100
 )
+
+func configuredDefaultPassword(envName string, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func EffectiveDefaultTeacherPassword() string {
+	return configuredDefaultPassword(defaultTeacherPasswordEnv, DefaultTeacherPassword)
+}
+
+func EffectiveDefaultStudentResetPassword() string {
+	return configuredDefaultPassword(defaultStudentResetPasswordEnv, DefaultStudentResetPassword)
+}
+
+func DefaultTeacherPasswordStartupText() string {
+	if strings.TrimSpace(os.Getenv(defaultTeacherPasswordEnv)) != "" {
+		return "已通过 " + defaultTeacherPasswordEnv + " 配置"
+	}
+	return DefaultTeacherPassword
+}
 
 var studentSubmissionAllowedExtensions = []string{".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".jpg", ".jpeg", ".png", ".zip", ".rar", ".7z"}
 var studentSubmissionTypeExtensions = map[string][]string{
@@ -122,6 +153,15 @@ type App struct {
 	baseDir                 string
 	storageRoot             string
 	prepareServerPortChange func(port string) (PreparedServerPortChange, error)
+	disableCSRFForTests     bool
+
+	shareAttemptsMu sync.Mutex
+	shareAttempts   map[string]*shareAttempt
+}
+
+type shareAttempt struct {
+	failures  int
+	lockUntil time.Time
 }
 
 type apiError struct {
@@ -190,12 +230,14 @@ type systemSettings struct {
 	SingleAccountLoginEnabled bool   `json:"singleAccountLoginEnabled"`
 	ServerPort                string `json:"serverPort"`
 	ServerHost                string `json:"serverHost"`
+	DefaultShareExpiresDays   int    `json:"defaultShareExpiresDays"`
 }
 
 type updateSystemSettingsRequest struct {
 	UploadPanelEnabled        bool   `json:"uploadPanelEnabled"`
 	SingleAccountLoginEnabled *bool  `json:"singleAccountLoginEnabled"`
 	ServerPort                string `json:"serverPort"`
+	DefaultShareExpiresDays   *int   `json:"defaultShareExpiresDays"`
 }
 
 type systemSettingsResult struct {
@@ -808,12 +850,18 @@ func New(config Config) (http.Handler, error) {
 		return nil, err
 	}
 
+	// Configure connection pool for better concurrency handling
+	db.SetMaxOpenConns(25)                  // Maximum number of open connections to the database
+	db.SetMaxIdleConns(5)                   // Maximum number of idle connections in the pool
+	db.SetConnMaxLifetime(5 * time.Minute)  // Maximum amount of time a connection may be reused
+
 	app := &App{
 		db:                      db,
 		mux:                     http.NewServeMux(),
 		baseDir:                 baseDir,
 		storageRoot:             storageRoot,
 		prepareServerPortChange: config.PrepareServerPortChange,
+		shareAttempts:           make(map[string]*shareAttempt),
 	}
 
 	if err := app.initialize(config.Seed); err != nil {
@@ -829,11 +877,167 @@ func (app *App) SetServerPortChangeHandler(handler func(port string) (PreparedSe
 }
 
 func (app *App) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if !app.allowRequestOrigin(writer, request) {
+		return
+	}
 	app.mux.ServeHTTP(writer, request)
 }
 
 func (app *App) Close() error {
 	return app.db.Close()
+}
+
+func (app *App) setAuthCookie(writer http.ResponseWriter, request *http.Request, name, value string, expires time.Time) {
+	http.SetCookie(writer, &http.Cookie{
+		Name:     name,
+		Value:    value,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secureCookieForRequest(request),
+		SameSite: http.SameSiteStrictMode,
+		Expires:  expires,
+	})
+}
+
+func (app *App) clearAuthCookie(writer http.ResponseWriter, request *http.Request, name string) {
+	http.SetCookie(writer, &http.Cookie{
+		Name:     name,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secureCookieForRequest(request),
+		SameSite: http.SameSiteStrictMode,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+	})
+}
+
+func (app *App) setCSRFCookie(writer http.ResponseWriter, request *http.Request, value string, expires time.Time) {
+	http.SetCookie(writer, &http.Cookie{
+		Name:     csrfCookieName,
+		Value:    value,
+		Path:     "/",
+		HttpOnly: false,
+		Secure:   secureCookieForRequest(request),
+		SameSite: http.SameSiteStrictMode,
+		Expires:  expires,
+	})
+}
+
+func (app *App) clearCSRFCookie(writer http.ResponseWriter, request *http.Request) {
+	http.SetCookie(writer, &http.Cookie{
+		Name:     csrfCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: false,
+		Secure:   secureCookieForRequest(request),
+		SameSite: http.SameSiteStrictMode,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+	})
+}
+
+func (app *App) ensureCSRFCookie(writer http.ResponseWriter, request *http.Request) error {
+	cookie, err := request.Cookie(csrfCookieName)
+	if err == nil && strings.TrimSpace(cookie.Value) != "" {
+		return nil
+	}
+	token, err := generateToken()
+	if err != nil {
+		return err
+	}
+	app.setCSRFCookie(writer, request, token, time.Now().Add(sessionDuration))
+	return nil
+}
+
+func secureCookieForRequest(request *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CLASSDRIVE_COOKIE_SECURE"))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return request.TLS != nil
+	}
+}
+
+func needsCSRFProtection(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	default:
+		return true
+	}
+}
+
+func requestScheme(request *http.Request) string {
+	if request.URL != nil && request.URL.Scheme != "" {
+		return strings.ToLower(request.URL.Scheme)
+	}
+	if request.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+func requestHost(request *http.Request) string {
+	if strings.TrimSpace(request.Host) != "" {
+		return strings.ToLower(strings.TrimSpace(request.Host))
+	}
+	if request.URL != nil {
+		return strings.ToLower(strings.TrimSpace(request.URL.Host))
+	}
+	return ""
+}
+
+func sameOrigin(request *http.Request, rawOrigin string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawOrigin))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	return strings.EqualFold(parsed.Scheme, requestScheme(request)) &&
+		strings.EqualFold(parsed.Host, requestHost(request))
+}
+
+func (app *App) allowRequestOrigin(writer http.ResponseWriter, request *http.Request) bool {
+	if !needsCSRFProtection(request.Method) {
+		return true
+	}
+	if origin := strings.TrimSpace(request.Header.Get("Origin")); origin != "" {
+		if sameOrigin(request, origin) {
+			return true
+		}
+		app.writeError(writer, http.StatusForbidden, "csrf_rejected", "请求来源不可信")
+		return false
+	}
+	if referer := strings.TrimSpace(request.Header.Get("Referer")); referer != "" {
+		if sameOrigin(request, referer) {
+			return true
+		}
+		app.writeError(writer, http.StatusForbidden, "csrf_rejected", "请求来源不可信")
+		return false
+	}
+	return true
+}
+
+func (app *App) validateCSRF(writer http.ResponseWriter, request *http.Request) bool {
+	if !needsCSRFProtection(request.Method) {
+		return true
+	}
+	if app.disableCSRFForTests {
+		return true
+	}
+	headerValue := strings.TrimSpace(request.Header.Get(csrfHeaderName))
+	cookie, err := request.Cookie(csrfCookieName)
+	if err != nil || strings.TrimSpace(cookie.Value) == "" || headerValue == "" {
+		app.writeError(writer, http.StatusForbidden, "csrf_rejected", "请求校验失败")
+		return false
+	}
+	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(cookie.Value)), []byte(headerValue)) != 1 {
+		app.writeError(writer, http.StatusForbidden, "csrf_rejected", "请求校验失败")
+		return false
+	}
+	return true
 }
 
 func (app *App) initialize(seed bool) error {
@@ -891,6 +1095,9 @@ func (app *App) registerRoutes() {
 	app.mux.HandleFunc("/api/files/folder", app.withSession(app.handleCreateFolder))
 	app.mux.HandleFunc("/api/files/copy", app.withSession(app.handleCopyFile))
 	app.mux.HandleFunc("/api/files/", app.withSession(app.handleFileByID))
+	app.mux.HandleFunc("/api/library-shares", app.withSession(app.handleLibraryShares))
+	app.mux.HandleFunc("/api/library-shares/", app.withSession(app.handleLibraryShareByID))
+	app.mux.HandleFunc("/api/share/", app.handlePublicShare)
 	app.mux.HandleFunc("/", app.handleFrontend)
 }
 
@@ -946,14 +1153,14 @@ func (app *App) handleLogin(writer http.ResponseWriter, request *http.Request) {
 	}
 	app.recordLoginLog(request, "teacher", teacher.ID, teacher.Username, teacher.DisplayName, "success", loginMessage)
 
-	http.SetCookie(writer, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Now().Add(sessionDuration),
-	})
+	csrfToken, err := generateToken()
+	if err != nil {
+		app.writeError(writer, http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	expires := time.Now().Add(sessionDuration)
+	app.setAuthCookie(writer, request, sessionCookieName, token, expires)
+	app.setCSRFCookie(writer, request, csrfToken, expires)
 
 	app.writeJSON(writer, http.StatusOK, loginResult{
 		User: teacher.toSessionUser(),
@@ -971,15 +1178,8 @@ func (app *App) handleLogout(writer http.ResponseWriter, request *http.Request, 
 	}
 	app.recordLoginLog(request, "teacher", teacher.ID, teacher.Username, teacher.DisplayName, "success", "老师退出登录")
 
-	http.SetCookie(writer, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Unix(0, 0),
-		MaxAge:   -1,
-	})
+	app.clearAuthCookie(writer, request, sessionCookieName)
+	app.clearCSRFCookie(writer, request)
 
 	app.writeJSON(writer, http.StatusOK, map[string]any{
 		"ok":   true,
@@ -995,6 +1195,10 @@ func (app *App) handleSession(writer http.ResponseWriter, request *http.Request)
 	teacher, err := app.requireTeacher(request)
 	if err != nil {
 		app.writeError(writer, http.StatusUnauthorized, "unauthorized", "未登录")
+		return
+	}
+	if err := app.ensureCSRFCookie(writer, request); err != nil {
+		app.writeError(writer, http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
 	app.writeJSON(writer, http.StatusOK, sessionResponse{User: teacher.toSessionUser()})
@@ -1048,14 +1252,14 @@ func (app *App) handleStudentActivate(writer http.ResponseWriter, request *http.
 	}
 	app.recordLoginLog(request, "student", student.ID, student.StudentNo, student.DisplayName, "success", loginMessage)
 
-	http.SetCookie(writer, &http.Cookie{
-		Name:     studentSessionCookieName,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Now().Add(sessionDuration),
-	})
+	csrfToken, err := generateToken()
+	if err != nil {
+		app.writeError(writer, http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	expires := time.Now().Add(sessionDuration)
+	app.setAuthCookie(writer, request, studentSessionCookieName, token, expires)
+	app.setCSRFCookie(writer, request, csrfToken, expires)
 
 	app.writeJSON(writer, http.StatusOK, studentSessionResult{User: student.toSessionUser()})
 }
@@ -1109,14 +1313,14 @@ func (app *App) handleStudentLogin(writer http.ResponseWriter, request *http.Req
 	}
 	app.recordLoginLog(request, "student", student.ID, student.StudentNo, student.DisplayName, "success", loginMessage)
 
-	http.SetCookie(writer, &http.Cookie{
-		Name:     studentSessionCookieName,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Now().Add(sessionDuration),
-	})
+	csrfToken, err := generateToken()
+	if err != nil {
+		app.writeError(writer, http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	expires := time.Now().Add(sessionDuration)
+	app.setAuthCookie(writer, request, studentSessionCookieName, token, expires)
+	app.setCSRFCookie(writer, request, csrfToken, expires)
 
 	app.writeJSON(writer, http.StatusOK, studentSessionResult{User: student.toSessionUser()})
 }
@@ -1132,15 +1336,8 @@ func (app *App) handleStudentLogout(writer http.ResponseWriter, request *http.Re
 	}
 	app.recordLoginLog(request, "student", student.ID, student.StudentNo, student.DisplayName, "success", "学生退出登录")
 
-	http.SetCookie(writer, &http.Cookie{
-		Name:     studentSessionCookieName,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Unix(0, 0),
-		MaxAge:   -1,
-	})
+	app.clearAuthCookie(writer, request, studentSessionCookieName)
+	app.clearCSRFCookie(writer, request)
 
 	app.writeJSON(writer, http.StatusOK, map[string]any{
 		"ok": true,
@@ -1156,6 +1353,10 @@ func (app *App) handleStudentSession(writer http.ResponseWriter, request *http.R
 	student, err := app.requireStudent(request)
 	if err != nil {
 		app.writeError(writer, http.StatusUnauthorized, "unauthorized", "未登录")
+		return
+	}
+	if err := app.ensureCSRFCookie(writer, request); err != nil {
+		app.writeError(writer, http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
 
@@ -2349,16 +2550,11 @@ func (app *App) handleFiles(writer http.ResponseWriter, request *http.Request, _
 			app.writeError(writer, http.StatusUnprocessableEntity, "invalid_request", err.Error())
 			return
 		}
-		items, err := app.listFileEntries(space, classID, currentPath)
+		items, pagination, err := app.listFileEntriesPage(space, classID, currentPath, query)
 		if err != nil {
 			app.writeDomainError(writer, err)
 			return
 		}
-		if err := app.applyFileEntryFolderSizes(items); err != nil {
-			app.writeDomainError(writer, err)
-			return
-		}
-		items, pagination := sortAndPaginateFileEntries(items, query)
 		result := fileListResult{
 			Space:       space,
 			CurrentPath: currentPath,
@@ -2822,15 +3018,12 @@ func (app *App) serveEntryArchive(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 
-	archiveData, err := app.buildDirectoryArchive(entry)
-	if err != nil {
-		app.writeDomainError(writer, err)
-		return
-	}
 	writer.Header().Set("Content-Type", "application/zip")
 	writer.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", entry.Name+".zip"))
 	writer.WriteHeader(http.StatusOK)
-	_, _ = writer.Write(archiveData)
+	if err := app.writeDirectoryArchive(writer, entry); err != nil {
+		log.Printf("stream directory archive %d: %v", entry.ID, err)
+	}
 }
 
 func (app *App) handleFilesBatchArchive(writer http.ResponseWriter, request *http.Request, _ teacherRecord) {
@@ -2854,15 +3047,12 @@ func (app *App) handleFilesBatchArchive(writer http.ResponseWriter, request *htt
 		entries = append(entries, *entry)
 	}
 
-	archiveData, err := app.buildFileEntriesArchive(entries)
-	if err != nil {
-		app.writeDomainError(writer, err)
-		return
-	}
 	writer.Header().Set("Content-Type", "application/zip")
 	writer.Header().Set("Content-Disposition", `attachment; filename="资料下载.zip"`)
 	writer.WriteHeader(http.StatusOK)
-	_, _ = writer.Write(archiveData)
+	if err := app.writeFileEntriesArchive(writer, entries); err != nil {
+		log.Printf("stream batch file archive: %v", err)
+	}
 }
 
 func studentFileSpace(raw string, student studentRecord) (string, *int64, error) {
@@ -2903,15 +3093,12 @@ func (app *App) serveStudentFileArchive(writer http.ResponseWriter, request *htt
 		return
 	}
 
-	archiveData, err := app.buildDirectoryArchive(entry)
-	if err != nil {
-		app.writeDomainError(writer, err)
-		return
-	}
 	writer.Header().Set("Content-Type", "application/zip")
 	writer.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", entry.Name+".zip"))
 	writer.WriteHeader(http.StatusOK)
-	_, _ = writer.Write(archiveData)
+	if err := app.writeDirectoryArchive(writer, entry); err != nil {
+		log.Printf("stream student directory archive %d: %v", entry.ID, err)
+	}
 }
 
 func (app *App) serveSubmissionEntryDownload(writer http.ResponseWriter, request *http.Request, entry *fileEntry) {
@@ -2923,27 +3110,23 @@ func (app *App) serveSubmissionEntryDownload(writer http.ResponseWriter, request
 		app.writeError(writer, http.StatusNotFound, "not_found", "附件不存在")
 		return
 	}
-	archiveData, err := app.buildDirectoryArchive(entry)
-	if err != nil {
-		app.writeDomainError(writer, err)
-		return
-	}
 	writer.Header().Set("Content-Type", "application/zip")
 	writer.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", entry.Name+".zip"))
 	writer.WriteHeader(http.StatusOK)
-	_, _ = writer.Write(archiveData)
+	if err := app.writeDirectoryArchive(writer, entry); err != nil {
+		log.Printf("stream submission directory archive %d: %v", entry.ID, err)
+	}
 }
 
-func (app *App) buildDirectoryArchive(entry *fileEntry) ([]byte, error) {
+func (app *App) writeDirectoryArchive(output io.Writer, entry *fileEntry) error {
 	descendants, err := app.listDescendants(entry)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	var buffer bytes.Buffer
-	archive := zip.NewWriter(&buffer)
+	archive := zip.NewWriter(output)
 	if _, err := archive.Create(entry.Name + "/"); err != nil {
-		return nil, err
+		return err
 	}
 	for _, item := range descendants {
 		relativePath := strings.TrimPrefix(item.ItemPath, entry.ItemPath+"/")
@@ -2951,13 +3134,13 @@ func (app *App) buildDirectoryArchive(entry *fileEntry) ([]byte, error) {
 		if item.Kind == "dir" {
 			if _, err := archive.Create(archivePath + "/"); err != nil {
 				_ = archive.Close()
-				return nil, err
+				return err
 			}
 			continue
 		}
 		if item.Kind != "file" {
 			_ = archive.Close()
-			return nil, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "目录归档包含未知资源类型"}
+			return domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "目录归档包含未知资源类型"}
 		}
 		header := &zip.FileHeader{
 			Name:   archivePath,
@@ -2969,34 +3152,33 @@ func (app *App) buildDirectoryArchive(entry *fileEntry) ([]byte, error) {
 		writer, err := archive.CreateHeader(header)
 		if err != nil {
 			_ = archive.Close()
-			return nil, err
+			return err
 		}
 		absolutePath := filepath.Join(app.storageRoot, filepath.FromSlash(item.DiskPath))
 		file, err := os.Open(absolutePath)
 		if err != nil {
 			_ = archive.Close()
-			return nil, err
+			return err
 		}
 		_, copyErr := io.Copy(writer, file)
 		_ = file.Close()
 		if copyErr != nil {
 			_ = archive.Close()
-			return nil, copyErr
+			return copyErr
 		}
 	}
 	if err := archive.Close(); err != nil {
-		return nil, err
+		return err
 	}
-	return buffer.Bytes(), nil
+	return nil
 }
 
-func (app *App) buildFileEntriesArchive(entries []fileEntry) ([]byte, error) {
+func (app *App) writeFileEntriesArchive(output io.Writer, entries []fileEntry) error {
 	if len(entries) == 0 {
-		return nil, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "请选择要下载的资料"}
+		return domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "请选择要下载的资料"}
 	}
 
-	var buffer bytes.Buffer
-	archive := zip.NewWriter(&buffer)
+	archive := zip.NewWriter(output)
 	createdDirs := make(map[string]struct{})
 	usedRootNames := make(map[string]int, len(entries))
 	for _, entry := range entries {
@@ -3005,22 +3187,22 @@ func (app *App) buildFileEntriesArchive(entries []fileEntry) ([]byte, error) {
 		case "file":
 			if err := app.writeArchiveFile(archive, entry, rootName); err != nil {
 				_ = archive.Close()
-				return nil, err
+				return err
 			}
 		case "dir":
 			if err := app.writeDirectoryEntryArchive(archive, createdDirs, entry, rootName); err != nil {
 				_ = archive.Close()
-				return nil, err
+				return err
 			}
 		default:
 			_ = archive.Close()
-			return nil, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "资料归档包含未知资源类型"}
+			return domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "资料归档包含未知资源类型"}
 		}
 	}
 	if err := archive.Close(); err != nil {
-		return nil, err
+		return err
 	}
-	return buffer.Bytes(), nil
+	return nil
 }
 
 func (app *App) writeDirectoryEntryArchive(archive *zip.Writer, createdDirs map[string]struct{}, entry fileEntry, rootName string) error {
@@ -3188,6 +3370,9 @@ func (app *App) withSession(next sessionHandler) http.HandlerFunc {
 			app.writeError(writer, http.StatusUnauthorized, "unauthorized", "未登录")
 			return
 		}
+		if !app.validateCSRF(writer, request) {
+			return
+		}
 		recorder := &auditResponseWriter{ResponseWriter: writer, statusCode: http.StatusOK}
 		next(recorder, request, *teacher)
 		app.recordOperationLog(request, "teacher", teacher.ID, teacher.DisplayName, recorder.statusCode)
@@ -3209,6 +3394,9 @@ func (app *App) withStudentSessionAccess(next studentSessionHandler, blockPasswo
 		}
 		if blockPasswordChangeRequired && student.MustChangePassword {
 			app.writeError(writer, http.StatusConflict, "password_change_required", "请先修改初始密码")
+			return
+		}
+		if !app.validateCSRF(writer, request) {
 			return
 		}
 		recorder := &auditResponseWriter{ResponseWriter: writer, statusCode: http.StatusOK}
@@ -3272,16 +3460,850 @@ func generateToken() (string, error) {
 
 func generateJoinCode() (string, error) {
 	const alphabet = "0123456789"
-	raw := make([]byte, classJoinCodeLen)
-	if _, err := rand.Read(raw); err != nil {
-		return "", err
-	}
+	max := big.NewInt(int64(len(alphabet)))
 	var builder strings.Builder
 	builder.Grow(classJoinCodeLen)
-	for _, item := range raw {
-		builder.WriteByte(alphabet[int(item)%len(alphabet)])
+	for range classJoinCodeLen {
+		item, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			return "", err
+		}
+		builder.WriteByte(alphabet[item.Int64()])
 	}
 	return builder.String(), nil
+}
+
+const (
+	sharePermissionView     = "view"
+	sharePermissionDownload = "download"
+	shareAccessCodeLength   = 6
+
+	shareSessionCookieName = "classdrive_share_session"
+	shareSessionDuration   = 2 * time.Hour
+
+	// 内存级安全码防爆破（LAN 场景，可一处关闭）。
+	shareBruteForceGuardEnabled = true
+	shareMaxFailedAttempts      = 5
+	shareCooldown               = 30 * time.Second
+
+	defaultShareExpiresDaysFallback = 7
+	maxShareExpiresDays             = 3650
+)
+
+// generateShareAccessCode 生成无歧义大写字母数字安全码（去掉 0/O/1/I/L），逐位使用 crypto/rand。
+func generateShareAccessCode() (string, error) {
+	const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+	max := big.NewInt(int64(len(alphabet)))
+	var builder strings.Builder
+	builder.Grow(shareAccessCodeLength)
+	for range shareAccessCodeLength {
+		item, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			return "", err
+		}
+		builder.WriteByte(alphabet[item.Int64()])
+	}
+	return builder.String(), nil
+}
+
+type libraryShareRecord struct {
+	ID                 int64
+	Token              string
+	AccessCodeHash     string
+	EntryID            int64
+	Permission         string
+	ExpiresAt          string
+	Disabled           bool
+	CreatedByTeacherID int64
+	CreatedAt          string
+	UpdatedAt          string
+	LastAccessedAt     string
+	AccessCount        int64
+}
+
+type libraryShareItem struct {
+	ID                 int64  `json:"id"`
+	Token              string `json:"token"`
+	EntryID            int64  `json:"entryId"`
+	EntryName          string `json:"entryName"`
+	EntryKind          string `json:"entryKind"`
+	Permission         string `json:"permission"`
+	RequiresAccessCode bool   `json:"requiresAccessCode"`
+	ExpiresAt          string `json:"expiresAt"`
+	Disabled           bool   `json:"disabled"`
+	Status             string `json:"status"`
+	AccessCount        int64  `json:"accessCount"`
+	CreatedByName      string `json:"createdByName"`
+	CreatedAt          string `json:"createdAt"`
+	LastAccessedAt     string `json:"lastAccessedAt"`
+}
+
+type librarySharesResult struct {
+	Shares []libraryShareItem `json:"shares"`
+}
+
+type libraryShareResult struct {
+	Share libraryShareItem `json:"share"`
+}
+
+type createLibraryShareRequest struct {
+	EntryID           int64  `json:"entryId"`
+	Permission        string `json:"permission"`
+	RequireAccessCode bool   `json:"requireAccessCode"`
+	ExpiresAt         string `json:"expiresAt"`
+}
+
+type updateLibraryShareRequest struct {
+	Permission *string `json:"permission"`
+	ExpiresAt  *string `json:"expiresAt"`
+	Disabled   *bool   `json:"disabled"`
+}
+
+type createLibraryShareResult struct {
+	Share      libraryShareItem `json:"share"`
+	AccessCode string           `json:"accessCode"`
+}
+
+func normalizeSharePermission(raw string) (string, error) {
+	switch strings.TrimSpace(raw) {
+	case "", sharePermissionView:
+		return sharePermissionView, nil
+	case sharePermissionDownload:
+		return sharePermissionDownload, nil
+	default:
+		return "", domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "分享权限只能是仅查看或允许下载"}
+	}
+}
+
+func normalizeShareExpiresAt(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	parsed, err := time.Parse(time.RFC3339, trimmed)
+	if err != nil {
+		return "", domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "有效期格式不正确"}
+	}
+	return parsed.UTC().Format(time.RFC3339), nil
+}
+
+func libraryShareExpired(rec libraryShareRecord) bool {
+	if strings.TrimSpace(rec.ExpiresAt) == "" {
+		return false
+	}
+	expires, err := time.Parse(time.RFC3339, rec.ExpiresAt)
+	if err != nil {
+		return false
+	}
+	return time.Now().UTC().After(expires)
+}
+
+func (app *App) teacherDisplayName(teacherID int64) string {
+	var name string
+	if err := app.db.QueryRow(`select display_name from teachers where id = ?`, teacherID).Scan(&name); err != nil {
+		return ""
+	}
+	return name
+}
+
+// shareEntry 返回分享指向的有效老师资料条目；条目被删除或已移出 library 时返回 false。
+func (app *App) shareEntry(rec libraryShareRecord) (*fileEntry, bool) {
+	entry, err := app.getEntryByID(rec.EntryID)
+	if err != nil {
+		return nil, false
+	}
+	if entry.Space != "library" {
+		return nil, false
+	}
+	return entry, true
+}
+
+func (app *App) buildLibraryShareItem(rec libraryShareRecord) libraryShareItem {
+	item := libraryShareItem{
+		ID:                 rec.ID,
+		Token:              rec.Token,
+		EntryID:            rec.EntryID,
+		Permission:         rec.Permission,
+		RequiresAccessCode: strings.TrimSpace(rec.AccessCodeHash) != "",
+		ExpiresAt:          rec.ExpiresAt,
+		Disabled:           rec.Disabled,
+		AccessCount:        rec.AccessCount,
+		CreatedByName:      app.teacherDisplayName(rec.CreatedByTeacherID),
+		CreatedAt:          rec.CreatedAt,
+		LastAccessedAt:     rec.LastAccessedAt,
+	}
+	entry, valid := app.shareEntry(rec)
+	if valid {
+		item.EntryName = entry.Name
+		item.EntryKind = entry.Kind
+	}
+	switch {
+	case rec.Disabled:
+		item.Status = "disabled"
+	case libraryShareExpired(rec):
+		item.Status = "expired"
+	case !valid:
+		item.Status = "invalid"
+	default:
+		item.Status = "active"
+	}
+	return item
+}
+
+func (app *App) getLibraryShareByID(id int64) (*libraryShareRecord, error) {
+	row := app.db.QueryRow(`
+select id, token, access_code_hash, entry_id, permission, expires_at, disabled, created_by_teacher_id, created_at, updated_at, last_accessed_at, access_count
+from library_shares where id = ?`, id)
+	return scanLibraryShareRecord(row)
+}
+
+func scanLibraryShareRecord(row interface{ Scan(...any) error }) (*libraryShareRecord, error) {
+	var rec libraryShareRecord
+	if err := row.Scan(&rec.ID, &rec.Token, &rec.AccessCodeHash, &rec.EntryID, &rec.Permission, &rec.ExpiresAt, &rec.Disabled, &rec.CreatedByTeacherID, &rec.CreatedAt, &rec.UpdatedAt, &rec.LastAccessedAt, &rec.AccessCount); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, domainError{Status: http.StatusNotFound, Code: "not_found", Message: "分享不存在"}
+		}
+		return nil, err
+	}
+	return &rec, nil
+}
+
+func (app *App) listLibraryShares() ([]libraryShareItem, error) {
+	rows, err := app.db.Query(`
+select id, token, access_code_hash, entry_id, permission, expires_at, disabled, created_by_teacher_id, created_at, updated_at, last_accessed_at, access_count
+from library_shares order by created_at desc, id desc`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]libraryShareItem, 0)
+	for rows.Next() {
+		rec, err := scanLibraryShareRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, app.buildLibraryShareItem(*rec))
+	}
+	return items, rows.Err()
+}
+
+func (app *App) createLibraryShare(teacher teacherRecord, req createLibraryShareRequest) (createLibraryShareResult, error) {
+	entry, err := app.getEntryByID(req.EntryID)
+	if err != nil {
+		return createLibraryShareResult{}, err
+	}
+	if entry.Space != "library" {
+		return createLibraryShareResult{}, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "只能分享老师资料"}
+	}
+	permission, err := normalizeSharePermission(req.Permission)
+	if err != nil {
+		return createLibraryShareResult{}, err
+	}
+	expiresAt, err := normalizeShareExpiresAt(req.ExpiresAt)
+	if err != nil {
+		return createLibraryShareResult{}, err
+	}
+
+	accessCode := ""
+	accessCodeHash := ""
+	if req.RequireAccessCode {
+		accessCode, err = generateShareAccessCode()
+		if err != nil {
+			return createLibraryShareResult{}, err
+		}
+		accessCodeHash, err = hashPassword(accessCode)
+		if err != nil {
+			return createLibraryShareResult{}, err
+		}
+	}
+
+	token, err := generateToken()
+	if err != nil {
+		return createLibraryShareResult{}, err
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := app.db.Exec(`
+insert into library_shares (token, access_code_hash, entry_id, permission, expires_at, disabled, created_by_teacher_id, created_at, updated_at, last_accessed_at, access_count)
+values (?, ?, ?, ?, ?, 0, ?, ?, ?, '', 0)`,
+		token, accessCodeHash, entry.ID, permission, expiresAt, teacher.ID, now, now)
+	if err != nil {
+		return createLibraryShareResult{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return createLibraryShareResult{}, err
+	}
+	rec, err := app.getLibraryShareByID(id)
+	if err != nil {
+		return createLibraryShareResult{}, err
+	}
+	return createLibraryShareResult{Share: app.buildLibraryShareItem(*rec), AccessCode: accessCode}, nil
+}
+
+func (app *App) updateLibraryShare(id int64, req updateLibraryShareRequest) (libraryShareItem, error) {
+	rec, err := app.getLibraryShareByID(id)
+	if err != nil {
+		return libraryShareItem{}, err
+	}
+	if req.Permission != nil {
+		permission, err := normalizeSharePermission(*req.Permission)
+		if err != nil {
+			return libraryShareItem{}, err
+		}
+		rec.Permission = permission
+	}
+	if req.ExpiresAt != nil {
+		expiresAt, err := normalizeShareExpiresAt(*req.ExpiresAt)
+		if err != nil {
+			return libraryShareItem{}, err
+		}
+		rec.ExpiresAt = expiresAt
+	}
+	if req.Disabled != nil {
+		rec.Disabled = *req.Disabled
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := app.db.Exec(`update library_shares set permission = ?, expires_at = ?, disabled = ?, updated_at = ? where id = ?`,
+		rec.Permission, rec.ExpiresAt, boolToInt(rec.Disabled), now, rec.ID); err != nil {
+		return libraryShareItem{}, err
+	}
+	rec.UpdatedAt = now
+	return app.buildLibraryShareItem(*rec), nil
+}
+
+func (app *App) deleteLibraryShare(id int64) error {
+	rec, err := app.getLibraryShareByID(id)
+	if err != nil {
+		return err
+	}
+	if _, err := app.db.Exec(`delete from library_share_sessions where share_id = ?`, rec.ID); err != nil {
+		return err
+	}
+	_, err = app.db.Exec(`delete from library_shares where id = ?`, rec.ID)
+	return err
+}
+
+func (app *App) resetLibraryShareCode(id int64) (createLibraryShareResult, error) {
+	rec, err := app.getLibraryShareByID(id)
+	if err != nil {
+		return createLibraryShareResult{}, err
+	}
+	accessCode, err := generateShareAccessCode()
+	if err != nil {
+		return createLibraryShareResult{}, err
+	}
+	accessCodeHash, err := hashPassword(accessCode)
+	if err != nil {
+		return createLibraryShareResult{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := app.db.Exec(`update library_shares set access_code_hash = ?, updated_at = ? where id = ?`, accessCodeHash, now, rec.ID); err != nil {
+		return createLibraryShareResult{}, err
+	}
+	if _, err := app.db.Exec(`delete from library_share_sessions where share_id = ?`, rec.ID); err != nil {
+		return createLibraryShareResult{}, err
+	}
+	rec.AccessCodeHash = accessCodeHash
+	rec.UpdatedAt = now
+	return createLibraryShareResult{Share: app.buildLibraryShareItem(*rec), AccessCode: accessCode}, nil
+}
+
+func (app *App) handleLibraryShares(writer http.ResponseWriter, request *http.Request, teacher teacherRecord) {
+	switch request.Method {
+	case http.MethodGet:
+		shares, err := app.listLibraryShares()
+		if err != nil {
+			app.writeError(writer, http.StatusInternalServerError, "server_error", err.Error())
+			return
+		}
+		app.writeJSON(writer, http.StatusOK, librarySharesResult{Shares: shares})
+	case http.MethodPost:
+		var payload createLibraryShareRequest
+		if err := decodeJSONBody(request, &payload); err != nil {
+			app.writeError(writer, http.StatusUnprocessableEntity, "invalid_request", err.Error())
+			return
+		}
+		result, err := app.createLibraryShare(teacher, payload)
+		if err != nil {
+			app.writeDomainError(writer, err)
+			return
+		}
+		app.writeJSON(writer, http.StatusCreated, result)
+	default:
+		app.writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "不支持的请求方法")
+	}
+}
+
+func (app *App) handleLibraryShareByID(writer http.ResponseWriter, request *http.Request, _ teacherRecord) {
+	trimmed := strings.TrimPrefix(request.URL.Path, "/api/library-shares/")
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		app.writeError(writer, http.StatusNotFound, "not_found", "分享不存在")
+		return
+	}
+	shareID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		app.writeError(writer, http.StatusNotFound, "not_found", "分享不存在")
+		return
+	}
+
+	switch {
+	case len(parts) == 1 && request.Method == http.MethodPatch:
+		var payload updateLibraryShareRequest
+		if err := decodeJSONBody(request, &payload); err != nil {
+			app.writeError(writer, http.StatusUnprocessableEntity, "invalid_request", err.Error())
+			return
+		}
+		item, err := app.updateLibraryShare(shareID, payload)
+		if err != nil {
+			app.writeDomainError(writer, err)
+			return
+		}
+		app.writeJSON(writer, http.StatusOK, libraryShareResult{Share: item})
+	case len(parts) == 1 && request.Method == http.MethodDelete:
+		if err := app.deleteLibraryShare(shareID); err != nil {
+			app.writeDomainError(writer, err)
+			return
+		}
+		app.writeJSON(writer, http.StatusOK, map[string]any{"ok": true})
+	case len(parts) == 2 && parts[1] == "reset-code" && request.Method == http.MethodPost:
+		result, err := app.resetLibraryShareCode(shareID)
+		if err != nil {
+			app.writeDomainError(writer, err)
+			return
+		}
+		app.writeJSON(writer, http.StatusOK, result)
+	default:
+		app.writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "不支持的请求方法")
+	}
+}
+
+type shareInfo struct {
+	EntryID            int64  `json:"entryId"`
+	EntryName          string `json:"entryName"`
+	EntryKind          string `json:"entryKind"`
+	Permission         string `json:"permission"`
+	RequiresAccessCode bool   `json:"requiresAccessCode"`
+	ExpiresAt          string `json:"expiresAt"`
+	Status             string `json:"status"`
+}
+
+type shareInfoResult struct {
+	Info shareInfo `json:"info"`
+}
+
+type shareVerifyRequest struct {
+	AccessCode string `json:"accessCode"`
+}
+
+type shareFileItem struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Size        int64  `json:"size"`
+	MimeType    string `json:"mimeType"`
+	UpdatedAt   string `json:"updatedAt"`
+	PreviewURL  string `json:"previewUrl"`
+	DownloadURL string `json:"downloadUrl"`
+	ArchiveURL  string `json:"archiveUrl"`
+}
+
+type shareItemsResult struct {
+	Items []shareFileItem `json:"items"`
+	Path  string          `json:"path"`
+}
+
+var errShareNotFound = domainError{Status: http.StatusNotFound, Code: "not_found", Message: "分享不存在或已失效"}
+
+func (app *App) getLibraryShareByToken(token string) (*libraryShareRecord, error) {
+	row := app.db.QueryRow(`
+select id, token, access_code_hash, entry_id, permission, expires_at, disabled, created_by_teacher_id, created_at, updated_at, last_accessed_at, access_count
+from library_shares where token = ?`, strings.TrimSpace(token))
+	rec, err := scanLibraryShareRecord(row)
+	if err != nil {
+		if domain, ok := err.(domainError); ok && domain.Status == http.StatusNotFound {
+			return nil, errShareNotFound
+		}
+		return nil, err
+	}
+	return rec, nil
+}
+
+// resolveShareTarget 校验分享存在、未停用、未过期，且指向的老师资料条目仍有效。
+func (app *App) resolveShareTarget(token string) (*libraryShareRecord, *fileEntry, error) {
+	rec, err := app.getLibraryShareByToken(token)
+	if err != nil {
+		return nil, nil, err
+	}
+	if rec.Disabled || libraryShareExpired(*rec) {
+		return nil, nil, errShareNotFound
+	}
+	entry, ok := app.shareEntry(*rec)
+	if !ok {
+		return nil, nil, errShareNotFound
+	}
+	return rec, entry, nil
+}
+
+// findLibraryShareByID 用于操作日志摘要查询，返回轻量结构
+func (app *App) findLibraryShareByID(id int64, teacherID int64) (*struct{ entryName string }, error) {
+	rec, err := app.getLibraryShareByID(id)
+	if err != nil {
+		return nil, err
+	}
+	entry, ok := app.shareEntry(*rec)
+	if !ok {
+		return nil, err
+	}
+	return &struct{ entryName string }{entryName: entry.Name}, nil
+}
+
+// findShareByToken 用于操作日志摘要查询，返回轻量结构
+func (app *App) findShareByToken(token string) (*struct{ entryName string }, error) {
+	rec, entry, err := app.resolveShareTarget(token)
+	if err != nil {
+		// 分享已失效/删除时仍返回基本信息用于日志
+		rec, err = app.getLibraryShareByToken(token)
+		if err != nil {
+			return nil, err
+		}
+		// 尝试获取entry，即使已删除也尝试从数据库读取名称
+		var entryName string
+		if err := app.db.QueryRow(`select name from files where id = ?`, rec.EntryID).Scan(&entryName); err != nil {
+			entryName = "(已删除)"
+		}
+		return &struct{ entryName string }{entryName: entryName}, nil
+	}
+	return &struct{ entryName string }{entryName: entry.Name}, nil
+}
+
+// authorizeShareEntry 把访问限制在分享根（文件分享=仅该文件；文件夹分享=根及其子孙）。
+func (app *App) authorizeShareEntry(root *fileEntry, entryID int64) (*fileEntry, error) {
+	forbidden := domainError{Status: http.StatusForbidden, Code: "forbidden", Message: "无权访问该资源"}
+	if entryID == root.ID {
+		return root, nil
+	}
+	if root.Kind != "dir" {
+		return nil, forbidden
+	}
+	target, err := app.getEntryByID(entryID)
+	if err != nil {
+		return nil, errShareNotFound
+	}
+	if target.Space != "library" || classIDKey(target.ClassID) != classIDKey(root.ClassID) {
+		return nil, forbidden
+	}
+	if !strings.HasPrefix(target.ItemPath, root.ItemPath+"/") {
+		return nil, forbidden
+	}
+	return target, nil
+}
+
+func (app *App) issueShareSession(writer http.ResponseWriter, request *http.Request, rec *libraryShareRecord) error {
+	token, err := generateToken()
+	if err != nil {
+		return err
+	}
+	expires := time.Now().Add(shareSessionDuration)
+	if _, err := app.db.Exec(`insert into library_share_sessions (token, share_id, expires_at) values (?, ?, ?)`,
+		token, rec.ID, expires.UTC().Format(time.RFC3339)); err != nil {
+		return err
+	}
+	app.setAuthCookie(writer, request, shareSessionCookieName, token, expires)
+	return nil
+}
+
+func (app *App) shareSessionValid(request *http.Request, shareID int64) bool {
+	cookie, err := request.Cookie(shareSessionCookieName)
+	if err != nil || strings.TrimSpace(cookie.Value) == "" {
+		return false
+	}
+	var sessionShareID int64
+	var expiresAt string
+	if err := app.db.QueryRow(`select share_id, expires_at from library_share_sessions where token = ?`, cookie.Value).Scan(&sessionShareID, &expiresAt); err != nil {
+		return false
+	}
+	if sessionShareID != shareID {
+		return false
+	}
+	if expires, err := time.Parse(time.RFC3339, expiresAt); err == nil && time.Now().After(expires) {
+		return false
+	}
+	return true
+}
+
+// authorizeShareView 判定访客是否已可查看内容：免码分享放行，否则需有效分享会话。
+func (app *App) authorizeShareView(request *http.Request, rec *libraryShareRecord) bool {
+	if rec.AccessCodeHash == "" {
+		return true
+	}
+	return app.shareSessionValid(request, rec.ID)
+}
+
+func (app *App) touchShareAccess(shareID int64) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := app.db.Exec(`update library_shares set access_count = access_count + 1, last_accessed_at = ? where id = ?`, now, shareID); err != nil {
+		log.Printf("touch share access %d: %v", shareID, err)
+	}
+}
+
+func (app *App) shareLocked(token string) bool {
+	if !shareBruteForceGuardEnabled {
+		return false
+	}
+	app.shareAttemptsMu.Lock()
+	defer app.shareAttemptsMu.Unlock()
+	attempt := app.shareAttempts[token]
+	if attempt == nil {
+		return false
+	}
+	return time.Now().Before(attempt.lockUntil)
+}
+
+func (app *App) recordShareFailure(token string) {
+	if !shareBruteForceGuardEnabled {
+		return
+	}
+	app.shareAttemptsMu.Lock()
+	defer app.shareAttemptsMu.Unlock()
+
+	// Clean up expired entries to prevent unbounded growth
+	now := time.Now()
+	if len(app.shareAttempts) > 100 {
+		for key, attempt := range app.shareAttempts {
+			// Remove entries that have been unlocked for more than 1 hour
+			if attempt.lockUntil.Before(now) && now.Sub(attempt.lockUntil) > time.Hour {
+				delete(app.shareAttempts, key)
+			}
+		}
+	}
+
+	attempt := app.shareAttempts[token]
+	if attempt == nil {
+		attempt = &shareAttempt{}
+		app.shareAttempts[token] = attempt
+	}
+	attempt.failures++
+	if attempt.failures >= shareMaxFailedAttempts {
+		attempt.lockUntil = time.Now().Add(shareCooldown)
+	}
+}
+
+func (app *App) clearShareAttempts(token string) {
+	app.shareAttemptsMu.Lock()
+	defer app.shareAttemptsMu.Unlock()
+	delete(app.shareAttempts, token)
+}
+
+func (app *App) handlePublicShare(writer http.ResponseWriter, request *http.Request) {
+	recorder := &auditResponseWriter{ResponseWriter: writer, statusCode: http.StatusOK}
+	app.routePublicShare(recorder, request)
+	app.recordOperationLog(request, "visitor", 0, "", recorder.statusCode)
+}
+
+func (app *App) routePublicShare(writer http.ResponseWriter, request *http.Request) {
+	trimmed := strings.TrimPrefix(request.URL.Path, "/api/share/")
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		app.writeError(writer, http.StatusNotFound, "not_found", "分享不存在")
+		return
+	}
+	token := parts[0]
+
+	switch {
+	case len(parts) == 1 && request.Method == http.MethodGet:
+		app.handleShareInfo(writer, request, token)
+	case len(parts) == 2 && parts[1] == "verify" && request.Method == http.MethodPost:
+		app.handleShareVerify(writer, request, token)
+	case len(parts) == 2 && parts[1] == "items" && request.Method == http.MethodGet:
+		app.handleShareItems(writer, request, token)
+	case len(parts) == 4 && parts[1] == "files" && parts[3] == "preview" && request.Method == http.MethodGet:
+		app.handleShareContent(writer, request, token, parts[2], "preview")
+	case len(parts) == 4 && parts[1] == "files" && parts[3] == "download" && request.Method == http.MethodGet:
+		app.handleShareContent(writer, request, token, parts[2], "download")
+	case len(parts) == 4 && parts[1] == "files" && parts[3] == "archive" && request.Method == http.MethodGet:
+		app.handleShareContent(writer, request, token, parts[2], "archive")
+	default:
+		app.writeError(writer, http.StatusNotFound, "not_found", "分享不存在")
+	}
+}
+
+func (app *App) handleShareInfo(writer http.ResponseWriter, request *http.Request, token string) {
+	if err := app.ensureCSRFCookie(writer, request); err != nil {
+		app.writeError(writer, http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	rec, root, err := app.resolveShareTarget(token)
+	if err != nil {
+		app.writeDomainError(writer, err)
+		return
+	}
+	if rec.AccessCodeHash == "" {
+		if err := app.issueShareSession(writer, request, rec); err != nil {
+			app.writeError(writer, http.StatusInternalServerError, "server_error", err.Error())
+			return
+		}
+	}
+	app.writeJSON(writer, http.StatusOK, shareInfoResult{Info: shareInfo{
+		EntryID:            root.ID,
+		EntryName:          root.Name,
+		EntryKind:          root.Kind,
+		Permission:         rec.Permission,
+		RequiresAccessCode: rec.AccessCodeHash != "",
+		ExpiresAt:          rec.ExpiresAt,
+		Status:             "active",
+	}})
+}
+
+func (app *App) handleShareVerify(writer http.ResponseWriter, request *http.Request, token string) {
+	rec, _, err := app.resolveShareTarget(token)
+	if err != nil {
+		app.writeDomainError(writer, err)
+		return
+	}
+	if app.shareLocked(token) {
+		app.writeError(writer, http.StatusTooManyRequests, "too_many_requests", "尝试过于频繁，请稍后再试")
+		return
+	}
+	var payload shareVerifyRequest
+	if err := decodeJSONBody(request, &payload); err != nil {
+		app.writeError(writer, http.StatusUnprocessableEntity, "invalid_request", err.Error())
+		return
+	}
+	if rec.AccessCodeHash == "" {
+		if err := app.issueShareSession(writer, request, rec); err != nil {
+			app.writeError(writer, http.StatusInternalServerError, "server_error", err.Error())
+			return
+		}
+		app.writeJSON(writer, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+	if verifyPasswordHash(rec.AccessCodeHash, strings.TrimSpace(payload.AccessCode)) != nil {
+		app.recordShareFailure(token)
+		app.writeError(writer, http.StatusForbidden, "invalid_access_code", "安全码不正确")
+		return
+	}
+	app.clearShareAttempts(token)
+	if err := app.issueShareSession(writer, request, rec); err != nil {
+		app.writeError(writer, http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	app.touchShareAccess(rec.ID)
+	app.writeJSON(writer, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (app *App) handleShareItems(writer http.ResponseWriter, request *http.Request, token string) {
+	rec, root, err := app.resolveShareTarget(token)
+	if err != nil {
+		app.writeDomainError(writer, err)
+		return
+	}
+	if !app.authorizeShareView(request, rec) {
+		app.writeError(writer, http.StatusUnauthorized, "unauthorized", "请先输入安全码")
+		return
+	}
+	if root.Kind != "dir" {
+		app.writeError(writer, http.StatusUnprocessableEntity, "invalid_request", "该分享不是文件夹")
+		return
+	}
+	relativePath, err := normalizeRelativePath(request.URL.Query().Get("path"))
+	if err != nil {
+		app.writeError(writer, http.StatusUnprocessableEntity, "invalid_request", err.Error())
+		return
+	}
+	currentPath := root.ItemPath
+	if relativePath != "/" {
+		currentPath = root.ItemPath + relativePath
+	}
+	if currentPath != root.ItemPath && !strings.HasPrefix(currentPath, root.ItemPath+"/") {
+		app.writeError(writer, http.StatusForbidden, "forbidden", "无权访问该目录")
+		return
+	}
+	entries, err := app.listFileEntries("library", nil, currentPath)
+	if err != nil {
+		app.writeDomainError(writer, err)
+		return
+	}
+	items := make([]shareFileItem, 0, len(entries))
+	for _, entry := range entries {
+		items = append(items, buildShareFileItem(token, rec.Permission, entry))
+	}
+	app.writeJSON(writer, http.StatusOK, shareItemsResult{Items: items, Path: relativePath})
+}
+
+func buildShareFileItem(token, permission string, entry fileEntry) shareFileItem {
+	base := "/api/share/" + token + "/files/" + strconv.FormatInt(entry.ID, 10)
+	item := shareFileItem{
+		ID:         entry.ID,
+		Name:       entry.Name,
+		Kind:       entry.Kind,
+		Size:       entry.Size,
+		MimeType:   entry.MimeType,
+		UpdatedAt:  entry.UpdatedAt,
+		PreviewURL: base + "/preview",
+	}
+	if permission == sharePermissionDownload {
+		if entry.Kind == "dir" {
+			item.ArchiveURL = base + "/archive"
+		} else {
+			item.DownloadURL = base + "/download"
+		}
+	}
+	return item
+}
+
+func (app *App) handleShareContent(writer http.ResponseWriter, request *http.Request, token, rawEntryID, action string) {
+	rec, root, err := app.resolveShareTarget(token)
+	if err != nil {
+		app.writeDomainError(writer, err)
+		return
+	}
+	if !app.authorizeShareView(request, rec) {
+		app.writeError(writer, http.StatusUnauthorized, "unauthorized", "请先输入安全码")
+		return
+	}
+	if (action == "download" || action == "archive") && rec.Permission != sharePermissionDownload {
+		app.writeError(writer, http.StatusForbidden, "forbidden", "该分享不允许下载")
+		return
+	}
+	entryID, err := strconv.ParseInt(rawEntryID, 10, 64)
+	if err != nil {
+		app.writeError(writer, http.StatusNotFound, "not_found", "资源不存在")
+		return
+	}
+	target, err := app.authorizeShareEntry(root, entryID)
+	if err != nil {
+		app.writeDomainError(writer, err)
+		return
+	}
+	app.touchShareAccess(rec.ID)
+	switch action {
+	case "archive":
+		app.serveShareArchive(writer, request, target)
+	case "download":
+		app.serveFileEntryContent(writer, request, target, true)
+	default:
+		app.serveFileEntryContent(writer, request, target, false)
+	}
+}
+
+func (app *App) serveShareArchive(writer http.ResponseWriter, request *http.Request, entry *fileEntry) {
+	if entry.Kind == "file" {
+		app.serveFileEntryContent(writer, request, entry, true)
+		return
+	}
+	if entry.Kind != "dir" {
+		app.writeError(writer, http.StatusNotFound, "not_found", "资源不存在")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/zip")
+	writer.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", entry.Name+".zip"))
+	writer.WriteHeader(http.StatusOK)
+	if err := app.writeDirectoryArchive(writer, entry); err != nil {
+		log.Printf("stream share directory archive %d: %v", entry.ID, err)
+	}
 }
 
 func hashPassword(password string) (string, error) {
@@ -3426,10 +4448,37 @@ func normalizeRelativePath(raw string) (string, error) {
 	if trimmed == "" || trimmed == "/" {
 		return "/", nil
 	}
-	cleaned := path.Clean("/" + strings.TrimPrefix(trimmed, "/"))
-	if strings.Contains(cleaned, "..") {
-		return "", errors.New("非法路径")
+
+	// 在清理前检查明显的路径遍历尝试
+	if strings.Contains(trimmed, "..") {
+		return "", errors.New("非法路径：包含父目录引用")
 	}
+
+	// 检查 URL 编码的路径遍历尝试
+	// %2e = '.' , %2f = '/' , %5c = '\'
+	lowered := strings.ToLower(trimmed)
+	if strings.Contains(lowered, "%2e") || strings.Contains(lowered, "%5c") {
+		return "", errors.New("非法路径：包含编码的特殊字符")
+	}
+
+	// 使用 path.Clean 标准化路径（注意：这里使用 path 而非 filepath，因为我们处理的是 URL 路径）
+	cleaned := path.Clean("/" + strings.TrimPrefix(trimmed, "/"))
+
+	// 二次检查：确保清理后的路径不包含父目录引用
+	if strings.Contains(cleaned, "..") {
+		return "", errors.New("非法路径：清理后仍包含父目录引用")
+	}
+
+	// 确保路径以 / 开头且不等于根路径时不以 / 结尾
+	if cleaned != "/" && strings.HasSuffix(cleaned, "/") {
+		cleaned = strings.TrimSuffix(cleaned, "/")
+	}
+
+	// 最终验证：路径必须以 / 开头
+	if !strings.HasPrefix(cleaned, "/") {
+		return "", errors.New("非法路径：必须是绝对路径")
+	}
+
 	return cleaned, nil
 }
 
@@ -3773,6 +4822,10 @@ func (app *App) writeDomainError(writer http.ResponseWriter, err error) {
 }
 
 func (app *App) writeError(writer http.ResponseWriter, status int, code, message string) {
+	if status >= http.StatusInternalServerError {
+		log.Printf("server error response: status=%d code=%s message=%s", status, code, message)
+		message = serverErrorMessage
+	}
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(apiErrorEnvelope{
@@ -4138,7 +5191,8 @@ create table if not exists system_settings (
   id integer primary key check (id = 1),
   upload_panel_enabled integer not null default 1,
   single_account_login_enabled integer not null default 1,
-  server_port text not null default '80'
+  server_port text not null default '80',
+  default_share_expires_days integer not null default 7
 );
 
 create table if not exists students (
@@ -4193,11 +5247,34 @@ create table if not exists file_entries (
   updated_at text not null
 );
 
+create table if not exists library_shares (
+  id integer primary key autoincrement,
+  token text not null unique,
+  access_code_hash text not null default '',
+  entry_id integer not null,
+  permission text not null default 'view',
+  expires_at text not null default '',
+  disabled integer not null default 0,
+  created_by_teacher_id integer not null,
+  created_at text not null,
+  updated_at text not null,
+  last_accessed_at text not null default '',
+  access_count integer not null default 0
+);
+
+create table if not exists library_share_sessions (
+  token text primary key,
+  share_id integer not null,
+  expires_at text not null
+);
+
 create unique index if not exists idx_file_entries_scope_path on file_entries (space, ifnull(class_id, 0), item_path);
 create index if not exists idx_assignments_class_created on assignments (class_id, created_at desc, id desc);
 create unique index if not exists idx_assignment_submissions_assignment_student on assignment_submissions (assignment_id, student_id);
 create index if not exists idx_login_logs_occurred on login_logs (occurred_at desc, id desc);
 create index if not exists idx_operation_logs_occurred on operation_logs (occurred_at desc, id desc);
+create index if not exists idx_library_shares_token on library_shares (token);
+create index if not exists idx_library_shares_entry on library_shares (entry_id);
 `
 	if _, err := app.db.Exec(schema); err != nil {
 		return err
@@ -4239,14 +5316,21 @@ create index if not exists idx_operation_logs_occurred on operation_logs (occurr
 	return err
 }
 
-func (app *App) ensureClassesJoinCodeColumn() error {
-	rows, err := app.db.Query(`pragma table_info(classes)`)
+type columnDef struct {
+	Name     string
+	AlterSQL string
+}
+
+func (app *App) ensureColumns(tableName string, columns []columnDef) error {
+	if !isSQLiteIdentifier(tableName) {
+		return fmt.Errorf("invalid sqlite table identifier %q", tableName)
+	}
+	rows, err := app.db.Query(fmt.Sprintf(`pragma table_info(%s)`, tableName))
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	hasJoinCode := false
+	existing := make(map[string]struct{})
 	for rows.Next() {
 		var cid int
 		var columnName string
@@ -4255,286 +5339,95 @@ func (app *App) ensureClassesJoinCodeColumn() error {
 		var defaultValue sql.NullString
 		var primaryKey int
 		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
 			return err
 		}
-		if columnName == "join_code" {
-			hasJoinCode = true
-			break
-		}
+		existing[columnName] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return err
 	}
-	if hasJoinCode {
-		return nil
+	if err := rows.Close(); err != nil {
+		return err
 	}
-	_, err = app.db.Exec(`alter table classes add column join_code text not null default ''`)
-	return err
+
+	for _, column := range columns {
+		if _, ok := existing[column.Name]; ok {
+			continue
+		}
+		if _, err := app.db.Exec(column.AlterSQL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isSQLiteIdentifier(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index, char := range value {
+		isLetter := (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z')
+		isDigit := char >= '0' && char <= '9'
+		if char != '_' && !isLetter && !isDigit {
+			return false
+		}
+		if index == 0 && isDigit {
+			return false
+		}
+	}
+	return true
+}
+
+func (app *App) ensureClassesJoinCodeColumn() error {
+	return app.ensureColumns("classes", []columnDef{
+		{Name: "join_code", AlterSQL: `alter table classes add column join_code text not null default ''`},
+	})
 }
 
 func (app *App) ensureClassesRegistrationEnabledColumn() error {
-	rows, err := app.db.Query(`pragma table_info(classes)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	hasRegistrationEnabled := false
-	for rows.Next() {
-		var cid int
-		var columnName string
-		var columnType string
-		var notNull int
-		var defaultValue sql.NullString
-		var primaryKey int
-		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
-		}
-		if columnName == "registration_enabled" {
-			hasRegistrationEnabled = true
-			break
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if hasRegistrationEnabled {
-		return nil
-	}
-	_, err = app.db.Exec(`alter table classes add column registration_enabled integer not null default 0`)
-	return err
+	return app.ensureColumns("classes", []columnDef{
+		{Name: "registration_enabled", AlterSQL: `alter table classes add column registration_enabled integer not null default 0`},
+	})
 }
 
 func (app *App) ensureClassesRegistrationExpiresAtColumn() error {
-	rows, err := app.db.Query(`pragma table_info(classes)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	hasRegistrationExpiresAt := false
-	for rows.Next() {
-		var cid int
-		var name string
-		var columnType string
-		var notNull int
-		var defaultValue sql.NullString
-		var primaryKey int
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
-		}
-		if name == "registration_expires_at" {
-			hasRegistrationExpiresAt = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if hasRegistrationExpiresAt {
-		return nil
-	}
-	_, err = app.db.Exec(`alter table classes add column registration_expires_at text not null default ''`)
-	return err
+	return app.ensureColumns("classes", []columnDef{
+		{Name: "registration_expires_at", AlterSQL: `alter table classes add column registration_expires_at text not null default ''`},
+	})
 }
 
 func (app *App) ensureStudentsAuthColumns() error {
-	rows, err := app.db.Query(`pragma table_info(students)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	hasPasswordHash := false
-	hasActivatedAt := false
-	hasMustChangePassword := false
-	for rows.Next() {
-		var cid int
-		var columnName string
-		var columnType string
-		var notNull int
-		var defaultValue sql.NullString
-		var primaryKey int
-		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
-		}
-		switch columnName {
-		case "password_hash":
-			hasPasswordHash = true
-		case "activated_at":
-			hasActivatedAt = true
-		case "must_change_password":
-			hasMustChangePassword = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if !hasPasswordHash {
-		if _, err := app.db.Exec(`alter table students add column password_hash text not null default ''`); err != nil {
-			return err
-		}
-	}
-	if !hasActivatedAt {
-		if _, err := app.db.Exec(`alter table students add column activated_at text not null default ''`); err != nil {
-			return err
-		}
-	}
-	if !hasMustChangePassword {
-		if _, err := app.db.Exec(`alter table students add column must_change_password integer not null default 0`); err != nil {
-			return err
-		}
-	}
-	return nil
+	return app.ensureColumns("students", []columnDef{
+		{Name: "password_hash", AlterSQL: `alter table students add column password_hash text not null default ''`},
+		{Name: "activated_at", AlterSQL: `alter table students add column activated_at text not null default ''`},
+		{Name: "must_change_password", AlterSQL: `alter table students add column must_change_password integer not null default 0`},
+	})
 }
 
 func (app *App) ensureAssignmentSubmissionReviewColumns() error {
-	rows, err := app.db.Query(`pragma table_info(assignment_submissions)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	hasReviewStatus := false
-	hasTeacherComment := false
-	hasReviewedAt := false
-	hasReviewerName := false
-	for rows.Next() {
-		var cid int
-		var columnName string
-		var columnType string
-		var notNull int
-		var defaultValue sql.NullString
-		var primaryKey int
-		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
-		}
-		switch columnName {
-		case "review_status":
-			hasReviewStatus = true
-		case "teacher_comment":
-			hasTeacherComment = true
-		case "reviewed_at":
-			hasReviewedAt = true
-		case "reviewer_name":
-			hasReviewerName = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if !hasReviewStatus {
-		if _, err := app.db.Exec(`alter table assignment_submissions add column review_status text not null default 'pending'`); err != nil {
-			return err
-		}
-	}
-	if !hasTeacherComment {
-		if _, err := app.db.Exec(`alter table assignment_submissions add column teacher_comment text not null default ''`); err != nil {
-			return err
-		}
-	}
-	if !hasReviewedAt {
-		if _, err := app.db.Exec(`alter table assignment_submissions add column reviewed_at text not null default ''`); err != nil {
-			return err
-		}
-	}
-	if !hasReviewerName {
-		if _, err := app.db.Exec(`alter table assignment_submissions add column reviewer_name text not null default ''`); err != nil {
-			return err
-		}
-	}
-	return nil
+	return app.ensureColumns("assignment_submissions", []columnDef{
+		{Name: "review_status", AlterSQL: `alter table assignment_submissions add column review_status text not null default 'pending'`},
+		{Name: "teacher_comment", AlterSQL: `alter table assignment_submissions add column teacher_comment text not null default ''`},
+		{Name: "reviewed_at", AlterSQL: `alter table assignment_submissions add column reviewed_at text not null default ''`},
+		{Name: "reviewer_name", AlterSQL: `alter table assignment_submissions add column reviewer_name text not null default ''`},
+	})
 }
 
 func (app *App) ensureAssignmentSubmissionRuleColumns() error {
-	rows, err := app.db.Query(`pragma table_info(assignments)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	hasSubmissionMode := false
-	hasSubmissionTypeCategory := false
-	hasMinFileCount := false
-	for rows.Next() {
-		var cid int
-		var columnName string
-		var columnType string
-		var notNull int
-		var defaultValue sql.NullString
-		var primaryKey int
-		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
-		}
-		switch columnName {
-		case "submission_mode":
-			hasSubmissionMode = true
-		case "submission_type_category":
-			hasSubmissionTypeCategory = true
-		case "min_file_count":
-			hasMinFileCount = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if !hasSubmissionMode {
-		if _, err := app.db.Exec(`alter table assignments add column submission_mode text not null default 'any'`); err != nil {
-			return err
-		}
-	}
-	if !hasSubmissionTypeCategory {
-		if _, err := app.db.Exec(`alter table assignments add column submission_type_category text not null default 'mixed'`); err != nil {
-			return err
-		}
-	}
-	if !hasMinFileCount {
-		if _, err := app.db.Exec(`alter table assignments add column min_file_count integer not null default 1`); err != nil {
-			return err
-		}
-	}
-	return nil
+	return app.ensureColumns("assignments", []columnDef{
+		{Name: "submission_mode", AlterSQL: `alter table assignments add column submission_mode text not null default 'any'`},
+		{Name: "submission_type_category", AlterSQL: `alter table assignments add column submission_type_category text not null default 'mixed'`},
+		{Name: "min_file_count", AlterSQL: `alter table assignments add column min_file_count integer not null default 1`},
+	})
 }
 
 func (app *App) ensureTeachersRoleColumns() error {
-	rows, err := app.db.Query(`pragma table_info(teachers)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	hasRole := false
-	hasDisabled := false
-	for rows.Next() {
-		var cid int
-		var columnName string
-		var columnType string
-		var notNull int
-		var defaultValue sql.NullString
-		var primaryKey int
-		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
-		}
-		switch columnName {
-		case "role":
-			hasRole = true
-		case "disabled":
-			hasDisabled = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if !hasRole {
-		if _, err := app.db.Exec(`alter table teachers add column role text not null default 'staff'`); err != nil {
-			return err
-		}
-	}
-	if !hasDisabled {
-		if _, err := app.db.Exec(`alter table teachers add column disabled integer not null default 0`); err != nil {
-			return err
-		}
-	}
-	return nil
+	return app.ensureColumns("teachers", []columnDef{
+		{Name: "role", AlterSQL: `alter table teachers add column role text not null default 'staff'`},
+		{Name: "disabled", AlterSQL: `alter table teachers add column disabled integer not null default 0`},
+	})
 }
 
 func (app *App) ensureSystemSettingsRow() error {
@@ -4569,6 +5462,7 @@ func (app *App) migrateSystemSettingsTable() error {
 	columns := make([]string, 0, 4)
 	hasServerPort := false
 	hasSingleAccountLoginEnabled := false
+	hasDefaultShareExpiresDays := false
 	for rows.Next() {
 		var cid int
 		var columnName string
@@ -4585,17 +5479,25 @@ func (app *App) migrateSystemSettingsTable() error {
 			hasServerPort = true
 		case "single_account_login_enabled":
 			hasSingleAccountLoginEnabled = true
+		case "default_share_expires_days":
+			hasDefaultShareExpiresDays = true
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 
-	if hasServerPort && !hasSingleAccountLoginEnabled {
-		_, err := app.db.Exec(`alter table system_settings add column single_account_login_enabled integer not null default 1`)
-		return err
-	}
-	if hasServerPort && hasSingleAccountLoginEnabled {
+	if hasServerPort {
+		if !hasSingleAccountLoginEnabled {
+			if _, err := app.db.Exec(`alter table system_settings add column single_account_login_enabled integer not null default 1`); err != nil {
+				return err
+			}
+		}
+		if !hasDefaultShareExpiresDays {
+			if _, err := app.db.Exec(`alter table system_settings add column default_share_expires_days integer not null default 7`); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -4613,13 +5515,14 @@ create table system_settings_next (
   id integer primary key check (id = 1),
   upload_panel_enabled integer not null default 1,
   single_account_login_enabled integer not null default 1,
-  server_port text not null default '80'
+  server_port text not null default '80',
+  default_share_expires_days integer not null default 7
 )`); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`
-insert into system_settings_next (id, upload_panel_enabled, single_account_login_enabled, server_port)
-select id, upload_panel_enabled, 1, '80'
+insert into system_settings_next (id, upload_panel_enabled, single_account_login_enabled, server_port, default_share_expires_days)
+select id, upload_panel_enabled, 1, '80', 7
 from system_settings
 `); err != nil {
 		return err
@@ -4640,7 +5543,7 @@ func (app *App) seed() error {
 		return err
 	}
 	if teacherCount == 0 {
-		passwordHash, err := hashPassword(DefaultTeacherPassword)
+		passwordHash, err := hashPassword(EffectiveDefaultTeacherPassword())
 		if err != nil {
 			return err
 		}
@@ -5018,21 +5921,26 @@ func normalizeServerPort(raw string) (string, error) {
 }
 
 func (app *App) loadSystemSettings() (systemSettings, error) {
-	row := app.db.QueryRow(`select upload_panel_enabled, single_account_login_enabled, server_port from system_settings where id = 1`)
+	row := app.db.QueryRow(`select upload_panel_enabled, single_account_login_enabled, server_port, default_share_expires_days from system_settings where id = 1`)
 	var uploadPanelEnabled bool
 	var singleAccountLoginEnabled bool
 	var serverPort string
-	if err := row.Scan(&uploadPanelEnabled, &singleAccountLoginEnabled, &serverPort); err != nil {
+	var defaultShareExpiresDays int
+	if err := row.Scan(&uploadPanelEnabled, &singleAccountLoginEnabled, &serverPort, &defaultShareExpiresDays); err != nil {
 		return systemSettings{}, err
 	}
 	normalizedPort, err := normalizeServerPort(serverPort)
 	if err != nil {
 		normalizedPort = defaultServerPort
 	}
+	if defaultShareExpiresDays <= 0 {
+		defaultShareExpiresDays = defaultShareExpiresDaysFallback
+	}
 	return systemSettings{
 		UploadPanelEnabled:        uploadPanelEnabled,
 		SingleAccountLoginEnabled: singleAccountLoginEnabled,
 		ServerPort:                normalizedPort,
+		DefaultShareExpiresDays:   defaultShareExpiresDays,
 	}, nil
 }
 
@@ -5048,6 +5956,13 @@ func (app *App) updateSystemSettings(payload updateSystemSettingsRequest) (syste
 	singleAccountLoginEnabled := current.SingleAccountLoginEnabled
 	if payload.SingleAccountLoginEnabled != nil {
 		singleAccountLoginEnabled = *payload.SingleAccountLoginEnabled
+	}
+	defaultShareExpiresDays := current.DefaultShareExpiresDays
+	if payload.DefaultShareExpiresDays != nil {
+		defaultShareExpiresDays = *payload.DefaultShareExpiresDays
+		if defaultShareExpiresDays < 1 || defaultShareExpiresDays > maxShareExpiresDays {
+			return systemSettings{}, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "默认分享有效期需在 1 到 3650 天之间"}
+		}
 	}
 	preparedPortChange := PreparedServerPortChange{}
 	hasPreparedPortChange := false
@@ -5069,9 +5984,10 @@ func (app *App) updateSystemSettings(payload updateSystemSettingsRequest) (syste
 update system_settings
 set upload_panel_enabled = ?,
     single_account_login_enabled = ?,
-    server_port = ?
+    server_port = ?,
+    default_share_expires_days = ?
 where id = 1
-`, payload.UploadPanelEnabled, singleAccountLoginEnabled, serverPort)
+`, payload.UploadPanelEnabled, singleAccountLoginEnabled, serverPort, defaultShareExpiresDays)
 	if err != nil {
 		return systemSettings{}, err
 	}
@@ -5624,6 +6540,65 @@ where id = ? and class_id = ?`, assignmentID, classID)
 	return &assignment, nil
 }
 
+func (app *App) findAssignmentsByIDs(classID int64, assignmentIDs []int64) ([]assignmentSummary, error) {
+	if classID <= 0 {
+		return nil, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "classId 非法"}
+	}
+	if err := app.ensureClassExists(classID); err != nil {
+		return nil, err
+	}
+	if len(assignmentIDs) == 0 {
+		return []assignmentSummary{}, nil
+	}
+
+	// Build IN clause with placeholders
+	placeholders := make([]string, len(assignmentIDs))
+	args := make([]interface{}, len(assignmentIDs)+1)
+	args[0] = classID
+	for i, id := range assignmentIDs {
+		placeholders[i] = "?"
+		args[i+1] = id
+	}
+
+	query := fmt.Sprintf(`
+select id, class_id, title, description, due_at, status, submission_mode, submission_type_category, min_file_count, created_at, updated_at
+from assignments
+where class_id = ? and id in (%s)`, strings.Join(placeholders, ","))
+
+	rows, err := app.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	assignments := make([]assignmentSummary, 0, len(assignmentIDs))
+	for rows.Next() {
+		var assignment assignmentSummary
+		if err := rows.Scan(
+			&assignment.ID,
+			&assignment.ClassID,
+			&assignment.Title,
+			&assignment.Description,
+			&assignment.DueAt,
+			&assignment.Status,
+			&assignment.SubmissionMode,
+			&assignment.SubmissionTypeCategory,
+			&assignment.MinFileCount,
+			&assignment.CreatedAt,
+			&assignment.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		assignments = append(assignments, assignment)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return assignments, nil
+}
+
 func (app *App) updateAssignment(assignmentID, classID int64, payload updateAssignmentRequest) (*assignmentSummary, error) {
 	current, err := app.findAssignmentByID(assignmentID, classID)
 	if err != nil {
@@ -5948,33 +6923,48 @@ where space = ? and ifnull(class_id, 0) = ? and item_path like ?`,
 }
 
 func (app *App) applyFileEntryFolderSizes(entries []fileEntry) error {
+	directoryIDs := make([]any, 0)
+	directoryIndexes := make(map[int64]int)
 	for index := range entries {
 		if entries[index].Kind != "dir" {
 			continue
 		}
-		size, err := app.fileEntryFolderSize(entries[index])
-		if err != nil {
+		directoryIDs = append(directoryIDs, entries[index].ID)
+		directoryIndexes[entries[index].ID] = index
+	}
+	if len(directoryIDs) == 0 {
+		return nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(directoryIDs)), ",")
+	rows, err := app.db.Query(`
+select parent.id, coalesce(sum(child.size), 0)
+from file_entries parent
+left join file_entries child
+  on child.space = parent.space
+  and ifnull(child.class_id, 0) = ifnull(parent.class_id, 0)
+  and child.kind = 'file'
+  and child.item_path like parent.item_path || '/%'
+where parent.id in (`+placeholders+`)
+group by parent.id`,
+		directoryIDs...,
+	)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var entryID int64
+		var totalSize int64
+		if err := rows.Scan(&entryID, &totalSize); err != nil {
 			return err
 		}
-		entries[index].Size = size
+		if index, ok := directoryIndexes[entryID]; ok {
+			entries[index].Size = totalSize
+		}
 	}
-	return nil
-}
-
-func (app *App) fileEntryFolderSize(entry fileEntry) (int64, error) {
-	var totalSize int64
-	err := app.db.QueryRow(`
-select coalesce(sum(size), 0)
-from file_entries
-where space = ? and ifnull(class_id, 0) = ? and kind = 'file' and item_path like ?`,
-		entry.Space,
-		classIDKey(entry.ClassID),
-		entry.ItemPath+"/%",
-	).Scan(&totalSize)
-	if err != nil {
-		return 0, err
-	}
-	return totalSize, nil
+	return rows.Err()
 }
 
 func assignmentIsOverdue(dueAt string, now time.Time) bool {
@@ -6330,13 +7320,15 @@ func (app *App) buildAssignmentSubmissionsArchive(classID int64, assignmentIDs [
 		}
 		assignments = items
 	} else {
-		for _, assignmentID := range assignmentIDs {
-			assignment, err := app.findAssignmentByID(assignmentID, classID)
-			if err != nil {
-				return nil, "", err
-			}
-			assignments = append(assignments, *assignment)
+		// Use batch query instead of N+1 queries
+		items, err := app.findAssignmentsByIDs(classID, assignmentIDs)
+		if err != nil {
+			return nil, "", err
 		}
+		if len(items) != len(assignmentIDs) {
+			return nil, "", domainError{Status: http.StatusNotFound, Code: "not_found", Message: "部分作业不存在"}
+		}
+		assignments = items
 	}
 	if len(assignments) == 0 {
 		return nil, "", domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "当前班级没有可下载的作业"}
@@ -7302,7 +8294,8 @@ func (app *App) resetStudentPassword(studentID int64) (*studentPasswordResetResu
 		return nil, err
 	}
 
-	passwordHash, err := hashPassword(DefaultStudentResetPassword)
+	defaultPassword := EffectiveDefaultStudentResetPassword()
+	passwordHash, err := hashPassword(defaultPassword)
 	if err != nil {
 		return nil, err
 	}
@@ -7326,7 +8319,7 @@ where id = ?`,
 	student.ActivatedAt = activatedAt
 	return &studentPasswordResetResult{
 		Student:         *student,
-		DefaultPassword: DefaultStudentResetPassword,
+		DefaultPassword: defaultPassword,
 	}, nil
 }
 
@@ -7342,7 +8335,7 @@ func (app *App) changeStudentPassword(student studentRecord, payload studentPass
 	if newPassword == currentPassword {
 		return nil, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "新密码不能与当前密码相同"}
 	}
-	if newPassword == DefaultStudentResetPassword {
+	if newPassword == EffectiveDefaultStudentResetPassword() {
 		return nil, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "新密码不能使用默认密码"}
 	}
 
@@ -8278,7 +9271,7 @@ where ss.token = ? and ss.expires_at > ?`,
 }
 
 func (app *App) recordLoginLog(request *http.Request, actorType string, actorID int64, username string, actorName string, status string, message string) {
-	_, _ = app.db.Exec(`
+	if _, err := app.db.Exec(`
 insert into login_logs (occurred_at, actor_type, actor_id, actor_name, username, status, ip_address, user_agent, message)
 values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		time.Now().UTC().Format(time.RFC3339),
@@ -8290,7 +9283,9 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		clientIPAddress(request),
 		request.UserAgent(),
 		message,
-	)
+	); err != nil {
+		log.Printf("record login log: %v", err)
+	}
 }
 
 func (app *App) recordOperationLog(request *http.Request, actorType string, actorID int64, actorName string, statusCode int) {
@@ -8298,7 +9293,7 @@ func (app *App) recordOperationLog(request *http.Request, actorType string, acto
 	if !shouldRecordOperationLog(request.Method, requestPath) {
 		return
 	}
-	_, _ = app.db.Exec(`
+	if _, err := app.db.Exec(`
 insert into operation_logs (occurred_at, actor_type, actor_id, actor_name, method, path, status_code, ip_address, user_agent, summary)
 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		time.Now().UTC().Format(time.RFC3339),
@@ -8311,7 +9306,9 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		clientIPAddress(request),
 		request.UserAgent(),
 		app.operationLogSummaryForRequest(request, actorType, actorID, statusCode),
-	)
+	); err != nil {
+		log.Printf("record operation log: %v", err)
+	}
 }
 
 func (app *App) operationLogSummaryForRequest(request *http.Request, actorType string, actorID int64, statusCode int) string {
@@ -8338,6 +9335,10 @@ func (app *App) enrichedOperationLogSummary(request *http.Request, actorType str
 		return app.studentOperationLogSummaryForRequest(request, segments, actorID)
 	case "assignments":
 		return app.assignmentOperationLogSummaryForRequest(request, segments)
+	case "library-shares":
+		return app.libraryShareOperationLogSummary(request.Method, segments, actorID)
+	case "share":
+		return app.shareAccessOperationLogSummary(request.Method, segments)
 	default:
 		return "", false
 	}
@@ -8509,6 +9510,102 @@ func (app *App) assignmentOperationLogSummaryForRequest(request *http.Request, s
 			return "", false
 		}
 		return "老师下载学生提交文件：" + assignmentLabel + "/" + studentName + "/" + auditEntryName(entry), true
+	}
+	return "", false
+}
+
+func (app *App) libraryShareOperationLogSummary(method string, segments []string, actorID int64) (string, bool) {
+	// POST /api/library-shares - 创建分享
+	if method == http.MethodPost && len(segments) == 2 {
+		return "老师创建资料分享", true
+	}
+	// GET /api/library-shares - 查看分享列表（不记录）
+	if method == http.MethodGet && len(segments) == 2 {
+		return "", false
+	}
+	// PATCH /api/library-shares/:id - 修改分享
+	if method == http.MethodPatch && len(segments) == 3 {
+		shareID, ok := positivePathID(segments, 2)
+		if !ok {
+			return "", false
+		}
+		share, err := app.findLibraryShareByID(shareID, actorID)
+		if err != nil {
+			return "", false
+		}
+		return "老师修改资料分享：" + share.entryName, true
+	}
+	// DELETE /api/library-shares/:id - 删除分享
+	if method == http.MethodDelete && len(segments) == 3 {
+		shareID, ok := positivePathID(segments, 2)
+		if !ok {
+			return "", false
+		}
+		share, err := app.findLibraryShareByID(shareID, actorID)
+		if err != nil {
+			return "", false
+		}
+		return "老师删除资料分享：" + share.entryName, true
+	}
+	// POST /api/library-shares/:id/reset-code - 重置安全码
+	if method == http.MethodPost && len(segments) == 4 && segments[3] == "reset-code" {
+		shareID, ok := positivePathID(segments, 2)
+		if !ok {
+			return "", false
+		}
+		share, err := app.findLibraryShareByID(shareID, actorID)
+		if err != nil {
+			return "", false
+		}
+		return "老师重置分享安全码：" + share.entryName, true
+	}
+	return "", false
+}
+
+func (app *App) shareAccessOperationLogSummary(method string, segments []string) (string, bool) {
+	// POST /api/share/:token/verify - 验证安全码（不记录）
+	if method == http.MethodPost && len(segments) == 4 && segments[3] == "verify" {
+		return "", false
+	}
+	// GET /api/share/:token - 查看分享根信息（不记录）
+	if method == http.MethodGet && len(segments) == 3 {
+		return "", false
+	}
+	// GET /api/share/:token/items - 浏览目录（记录）
+	if method == http.MethodGet && len(segments) == 4 && segments[3] == "items" {
+		token := segments[2]
+		share, err := app.findShareByToken(token)
+		if err != nil {
+			return "", false
+		}
+		return "访客查看分享：" + share.entryName, true
+	}
+	// GET /api/share/:token/files/:id/preview - 预览文件
+	if method == http.MethodGet && len(segments) == 6 && segments[3] == "files" && segments[5] == "preview" {
+		token := segments[2]
+		share, err := app.findShareByToken(token)
+		if err != nil {
+			return "", false
+		}
+		return "访客预览分享文件：" + share.entryName, true
+	}
+	// GET /api/share/:token/files/:id/download - 下载文件
+	if method == http.MethodGet && len(segments) == 6 && segments[3] == "files" && segments[5] == "download" {
+		token := segments[2]
+		share, err := app.findShareByToken(token)
+		if err != nil {
+			return "", false
+		}
+		return "访客下载分享文件：" + share.entryName, true
+	}
+	// GET /api/share/:token/files/:id/archive - 下载文件夹压缩包
+	if method == http.MethodGet && len(segments) == 6 && segments[3] == "files" && segments[5] == "archive" {
+		token := segments[2]
+		share, err := app.findShareByToken(token)
+		if err != nil {
+			return "", false
+		}
+		return "访客下载分享文件夹：" + share.entryName, true
 	}
 	return "", false
 }
@@ -9263,14 +10360,47 @@ func teacherLoginLogName(teacher *teacherRecord) string {
 }
 
 func clientIPAddress(request *http.Request) string {
-	if forwardedFor := strings.TrimSpace(request.Header.Get("X-Forwarded-For")); forwardedFor != "" {
+	remoteAddress := remoteIPAddress(request)
+	if trustedProxyAddress(remoteAddress) {
+		forwardedFor := strings.TrimSpace(request.Header.Get("X-Forwarded-For"))
+		if forwardedFor == "" {
+			return remoteAddress
+		}
 		return strings.TrimSpace(strings.Split(forwardedFor, ",")[0])
 	}
+	return remoteAddress
+}
+
+func remoteIPAddress(request *http.Request) string {
 	host, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err == nil {
-		return host
+		return strings.TrimSpace(host)
 	}
 	return strings.TrimSpace(request.RemoteAddr)
+}
+
+func trustedProxyAddress(address string) bool {
+	parsedAddress := net.ParseIP(strings.TrimSpace(address))
+	if parsedAddress == nil {
+		return false
+	}
+	for _, rawTrusted := range strings.Split(os.Getenv("CLASSDRIVE_TRUSTED_PROXIES"), ",") {
+		trusted := strings.TrimSpace(rawTrusted)
+		if trusted == "" {
+			continue
+		}
+		if trustedIP := net.ParseIP(trusted); trustedIP != nil {
+			if trustedIP.Equal(parsedAddress) {
+				return true
+			}
+			continue
+		}
+		_, trustedNetwork, err := net.ParseCIDR(trusted)
+		if err == nil && trustedNetwork.Contains(parsedAddress) {
+			return true
+		}
+	}
+	return false
 }
 
 func (app *App) listFileEntries(space string, classID *int64, currentPath string) ([]fileEntry, error) {
@@ -9301,6 +10431,74 @@ func (app *App) listFileEntries(space string, classID *int64, currentPath string
 		items = append(items, entry)
 	}
 	return items, rows.Err()
+}
+
+const fileEntryEffectiveSizeExpression = `case when e.kind = 'dir' then coalesce((select sum(child.size) from file_entries child where child.space = e.space and ifnull(child.class_id, 0) = ifnull(e.class_id, 0) and child.kind = 'file' and child.item_path like e.item_path || '/%'), 0) else e.size end`
+
+func fileEntryListOrderBy(sort string) string {
+	switch sort {
+	case "name-desc":
+		return ` order by e.name desc`
+	case "updated-desc":
+		return ` order by e.updated_at desc, e.name asc`
+	case "updated-asc":
+		return ` order by e.updated_at asc, e.name asc`
+	case "size-desc":
+		return ` order by ` + fileEntryEffectiveSizeExpression + ` desc, e.name asc`
+	case "size-asc":
+		return ` order by ` + fileEntryEffectiveSizeExpression + ` asc, e.name asc`
+	default:
+		return ` order by e.name asc`
+	}
+}
+
+func (app *App) listFileEntriesPage(space string, classID *int64, currentPath string, listQuery teacherListQuery) ([]fileEntry, paginationPayload, error) {
+	if _, _, err := app.storageDir(space, classID); err != nil {
+		return nil, paginationPayload{}, err
+	}
+	whereClause := ` where e.space = ? and e.parent_path = ?`
+	args := []any{space, currentPath}
+	if classID == nil {
+		whereClause += ` and e.class_id is null`
+	} else {
+		whereClause += ` and e.class_id = ?`
+		args = append(args, *classID)
+	}
+
+	var total int
+	if err := app.db.QueryRow(`select count(*) from file_entries e`+whereClause, args...).Scan(&total); err != nil {
+		return nil, paginationPayload{}, err
+	}
+
+	query := `select e.id, e.space, e.class_id, e.parent_path, e.item_path, e.name, e.kind, e.mime_type, ` +
+		fileEntryEffectiveSizeExpression +
+		`, e.disk_path, e.created_at, e.updated_at from file_entries e` +
+		whereClause +
+		fileEntryListOrderBy(listQuery.Sort)
+	queryArgs := append([]any(nil), args...)
+	if listQuery.Paged {
+		query += ` limit ? offset ?`
+		queryArgs = append(queryArgs, listQuery.PageSize, listQuery.Offset)
+	}
+
+	rows, err := app.db.Query(query, queryArgs...)
+	if err != nil {
+		return nil, paginationPayload{}, err
+	}
+	defer rows.Close()
+
+	items := make([]fileEntry, 0, listQuery.PageSize)
+	for rows.Next() {
+		var entry fileEntry
+		if err := rows.Scan(&entry.ID, &entry.Space, &entry.ClassID, &entry.ParentPath, &entry.ItemPath, &entry.Name, &entry.Kind, &entry.MimeType, &entry.Size, &entry.DiskPath, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
+			return nil, paginationPayload{}, err
+		}
+		items = append(items, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, paginationPayload{}, err
+	}
+	return items, buildTeacherListPagination(total, listQuery, len(items)), nil
 }
 
 func (app *App) searchFileEntries(space string, classID *int64, currentPath, query string) ([]fileEntry, error) {

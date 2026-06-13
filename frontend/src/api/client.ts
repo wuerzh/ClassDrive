@@ -1,5 +1,3 @@
-import { useUploadStore } from "@/stores/upload";
-
 export interface SessionUser {
   id: number;
   username: string;
@@ -24,6 +22,7 @@ export interface SystemSettings {
   singleAccountLoginEnabled: boolean;
   serverPort: string;
   serverHost: string;
+  defaultShareExpiresDays: number;
 }
 
 export interface TeacherUser {
@@ -260,6 +259,34 @@ export type UploadConflictMode = "reject" | "skip" | "replace" | "rename";
 export interface UploadFileItem {
   file: File;
   relativePath?: string;
+}
+
+export interface UploadLifecycleItem {
+  id?: string;
+  name: string;
+  relativePath?: string;
+  totalBytes: number;
+}
+
+export interface UploadLifecycleController {
+  beginBatch?: (items: UploadLifecycleItem[]) => void;
+  setAbortHandler?: (handler: (() => void) | null) => void;
+  applyAggregateProgress?: (sentBytes: number, totalBytes?: number) => void;
+  markBatchDone?: () => void;
+  markBatchAborted?: () => void;
+  markFailedAt?: (sentBytes?: number) => void;
+  isAbortRequested?: () => boolean;
+  sentBytes?: () => number;
+}
+
+export interface UploadFilesPayload {
+  space: string;
+  classId?: number;
+  parentPath: string;
+  files: UploadFileItem[];
+  conflictMode?: UploadConflictMode;
+  onProgress?: (sent: number, total: number) => void;
+  controller?: UploadLifecycleController;
 }
 
 export interface UploadFilesResult {
@@ -501,6 +528,79 @@ export function describeFileSearchQuery(query: string): string {
   return parts.join("；");
 }
 
+export interface LibraryShareItem {
+  id: number;
+  token: string;
+  entryId: number;
+  entryName: string;
+  entryKind: string;
+  permission: "view" | "download";
+  requiresAccessCode: boolean;
+  expiresAt: string;
+  disabled: boolean;
+  status: string;
+  accessCount: number;
+  createdByName: string;
+  createdAt: string;
+  lastAccessedAt: string;
+}
+
+export interface CreateLibrarySharePayload {
+  entryId: number;
+  permission: "view" | "download";
+  requireAccessCode: boolean;
+  expiresAt: string;
+}
+
+export interface UpdateLibrarySharePayload {
+  permission?: "view" | "download";
+  expiresAt?: string;
+  disabled?: boolean;
+}
+
+export interface LibraryShareMutationResult {
+  share: LibraryShareItem;
+  accessCode: string;
+}
+
+export interface ShareInfo {
+  entryId: number;
+  entryName: string;
+  entryKind: "file" | "dir";
+  permission: "view" | "download";
+  requiresAccessCode: boolean;
+  expiresAt: string;
+  status: string;
+}
+
+export interface ShareFileItem {
+  id: number;
+  name: string;
+  kind: "file" | "dir";
+  size: number;
+  mimeType: string;
+  updatedAt: string;
+  previewUrl: string;
+  downloadUrl: string;
+  archiveUrl: string;
+}
+
+export function shareBasePath(token: string): string {
+  return `/api/share/${encodeURIComponent(token)}`;
+}
+
+export function shareFilePreviewUrl(token: string, entryId: number): string {
+  return `${shareBasePath(token)}/files/${entryId}/preview`;
+}
+
+export function shareFileDownloadUrl(token: string, entryId: number): string {
+  return `${shareBasePath(token)}/files/${entryId}/download`;
+}
+
+export function shareArchiveUrl(token: string, entryId: number): string {
+  return `${shareBasePath(token)}/files/${entryId}/archive`;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -530,6 +630,56 @@ function shouldNotifyUnauthorized(input: string): boolean {
     input !== "/api/student/auth/login" &&
     input !== "/api/student/auth/activate" &&
     input !== "/api/student/password";
+}
+
+function isWriteMethod(method: string | undefined): boolean {
+  const normalized = (method ?? "GET").toUpperCase();
+  return normalized === "POST" || normalized === "PUT" || normalized === "PATCH" || normalized === "DELETE";
+}
+
+function isSameOriginRequest(input: string): boolean {
+  if (input.startsWith("/")) {
+    return true;
+  }
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    return new URL(input, window.location.origin).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+function readCookie(name: string): string {
+  if (typeof document === "undefined") {
+    return "";
+  }
+  const prefix = `${encodeURIComponent(name)}=`;
+  const value = document.cookie
+    .split(";")
+    .map((item) => item.trim())
+    .find((item) => item.startsWith(prefix));
+  if (!value) {
+    return "";
+  }
+  return decodeURIComponent(value.slice(prefix.length));
+}
+
+function withCsrfHeader(input: string, init: RequestInit | undefined): RequestInit {
+  if (!isWriteMethod(init?.method) || !isSameOriginRequest(input)) {
+    return init ?? {};
+  }
+  const token = readCookie("classdrive_csrf");
+  if (!token) {
+    return init ?? {};
+  }
+  const headers = new Headers(init?.headers);
+  headers.set("X-CSRF-Token", token);
+  return {
+    ...init,
+    headers,
+  };
 }
 
 async function readRequestError(response: Response): Promise<Error> {
@@ -564,9 +714,10 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
+  const protectedInit = withCsrfHeader(input, init);
   const response = await fetch(input, {
     credentials: "same-origin",
-    ...init,
+    ...protectedInit,
   });
 
   if (!response.ok) {
@@ -585,6 +736,24 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   }
 
   return readJson<T>(response);
+}
+
+async function protectedFetch(input: string, init?: RequestInit): Promise<Response> {
+  const protectedInit = withCsrfHeader(input, init);
+  return fetch(input, {
+    credentials: "same-origin",
+    ...protectedInit,
+  });
+}
+
+function applyCsrfRequestHeader(request: XMLHttpRequest, input: string, method: string): void {
+  if (!isWriteMethod(method) || !isSameOriginRequest(input)) {
+    return;
+  }
+  const token = readCookie("classdrive_csrf");
+  if (token) {
+    request.setRequestHeader("X-CSRF-Token", token);
+  }
 }
 
 export const api = {
@@ -632,7 +801,7 @@ export const api = {
   systemSettings() {
     return request<{ settings: SystemSettings }>("/api/settings/system");
   },
-  updateSystemSettings(payload: Pick<SystemSettings, "uploadPanelEnabled" | "singleAccountLoginEnabled" | "serverPort">) {
+  updateSystemSettings(payload: Pick<SystemSettings, "uploadPanelEnabled" | "singleAccountLoginEnabled" | "serverPort" | "defaultShareExpiresDays">) {
     return request<{ settings: SystemSettings }>("/api/settings/system", {
       method: "PATCH",
       headers: {
@@ -640,6 +809,52 @@ export const api = {
       },
       body: JSON.stringify(payload),
     });
+  },
+  libraryShares() {
+    return request<{ shares: LibraryShareItem[] }>("/api/library-shares");
+  },
+  createLibraryShare(payload: CreateLibrarySharePayload) {
+    return request<LibraryShareMutationResult>("/api/library-shares", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  },
+  updateLibraryShare(id: number, payload: UpdateLibrarySharePayload) {
+    return request<{ share: LibraryShareItem }>(`/api/library-shares/${id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteLibraryShare(id: number) {
+    return request<{ ok: boolean }>(`/api/library-shares/${id}`, {
+      method: "DELETE",
+    });
+  },
+  resetLibraryShareCode(id: number) {
+    return request<LibraryShareMutationResult>(`/api/library-shares/${id}/reset-code`, {
+      method: "POST",
+    });
+  },
+  shareInfo(token: string) {
+    return request<{ info: ShareInfo }>(shareBasePath(token));
+  },
+  verifyShareAccessCode(token: string, accessCode: string) {
+    return request<{ ok: boolean }>(`${shareBasePath(token)}/verify`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ accessCode }),
+    });
+  },
+  shareBrowse(token: string, path: string) {
+    return request<{ items: ShareFileItem[]; path: string }>(`${shareBasePath(token)}/items?path=${encodeURIComponent(path)}`);
   },
   loginLogs(filters: LoginLogFilters = {}) {
     return request<{ logs: LoginLogItem[]; pagination: PaginationPayload }>(`/api/audit/login-logs${buildAuditLogQueryString(filters)}`);
@@ -1029,16 +1244,8 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
-  uploadFiles(payload: {
-    space: string;
-    classId?: number;
-    parentPath: string;
-    files: UploadFileItem[];
-    conflictMode?: UploadConflictMode;
-    onProgress?: (sent: number, total: number) => void;
-  }) {
-    const uploadStore = useUploadStore();
-    uploadStore.beginBatch(
+  uploadFiles(payload: UploadFilesPayload): Promise<UploadFilesResult> {
+    payload.controller?.beginBatch?.(
       payload.files.map((item, index) => ({
         id: `upload-file-${Date.now()}-${index + 1}`,
         name: item.file.name,
@@ -1058,27 +1265,19 @@ export const api = {
   },
 };
 
-async function uploadFilesResumable(payload: {
-  space: string;
-  classId?: number;
-  parentPath: string;
-  files: UploadFileItem[];
-  conflictMode?: UploadConflictMode;
-  onProgress?: (sent: number, total: number) => void;
-}) {
-  const uploadStore = useUploadStore();
+async function uploadFilesResumable(payload: UploadFilesPayload): Promise<UploadFilesResult> {
+  const lifecycle = payload.controller;
   const item = payload.files[0];
   if (!item) {
     throw new Error("缺少上传文件");
   }
 
   const controller = new AbortController();
-  uploadStore.setAbortHandler(() => controller.abort());
+  lifecycle?.setAbortHandler?.(() => controller.abort());
 
   try {
-    const createResponse = await fetch("/api/files/upload/sessions", {
+    const createResponse = await protectedFetch("/api/files/upload/sessions", {
       method: "POST",
-      credentials: "same-origin",
       signal: controller.signal,
       headers: {
         "Tus-Resumable": tusResumableVersion,
@@ -1104,9 +1303,8 @@ async function uploadFilesResumable(payload: {
     let offset = 0;
     while (offset < item.file.size) {
       const nextChunk = item.file.slice(offset, offset + resumableUploadChunkSize);
-      const response = await fetch(uploadUrl, {
+      const response = await protectedFetch(uploadUrl, {
         method: "PATCH",
-        credentials: "same-origin",
         signal: controller.signal,
         headers: {
           "Tus-Resumable": tusResumableVersion,
@@ -1124,12 +1322,12 @@ async function uploadFilesResumable(payload: {
       }
 
       const nextOffset = Number(response.headers.get("Upload-Offset") ?? offset + nextChunk.size);
-      uploadStore.applyAggregateProgress(nextOffset, item.file.size);
+      lifecycle?.applyAggregateProgress?.(nextOffset, item.file.size);
       payload.onProgress?.(nextOffset, item.file.size);
       offset = nextOffset;
     }
 
-    uploadStore.markBatchDone();
+    lifecycle?.markBatchDone?.();
     payload.onProgress?.(item.file.size, item.file.size);
     return {
       items: [],
@@ -1141,21 +1339,20 @@ async function uploadFilesResumable(payload: {
       },
     };
   } catch (error) {
-    if (uploadStore.abortRequested || isAbortError(error)) {
-      uploadStore.markBatchAborted();
+    if (lifecycle?.isAbortRequested?.() || isAbortError(error)) {
+      lifecycle?.markBatchAborted?.();
       throw new Error("上传已中止");
     }
-    uploadStore.markFailedAt(uploadStore.sentBytes);
+    lifecycle?.markFailedAt?.(lifecycle?.sentBytes?.());
     throw error;
   } finally {
-    uploadStore.setAbortHandler(null);
+    lifecycle?.setAbortHandler?.(null);
   }
 }
 
-async function readUploadOffset(uploadUrl: string, signal?: AbortSignal) {
-  const response = await fetch(uploadUrl, {
+async function readUploadOffset(uploadUrl: string, signal?: AbortSignal): Promise<number> {
+  const response = await protectedFetch(uploadUrl, {
     method: "HEAD",
-    credentials: "same-origin",
     signal,
     headers: {
       "Tus-Resumable": tusResumableVersion,
@@ -1167,15 +1364,8 @@ async function readUploadOffset(uploadUrl: string, signal?: AbortSignal) {
   return Number(response.headers.get("Upload-Offset") ?? "0");
 }
 
-function uploadFilesMultipart(payload: {
-  space: string;
-  classId?: number;
-  parentPath: string;
-  files: UploadFileItem[];
-  conflictMode?: UploadConflictMode;
-  onProgress?: (sent: number, total: number) => void;
-}) {
-  const uploadStore = useUploadStore();
+function uploadFilesMultipart(payload: UploadFilesPayload): Promise<UploadFilesResult> {
+  const lifecycle = payload.controller;
   const totalBytes = payload.files.reduce((sum, item) => sum + item.file.size, 0);
   return new Promise<UploadFilesResult>((resolve, reject) => {
     const formData = new FormData();
@@ -1197,13 +1387,14 @@ function uploadFilesMultipart(payload: {
     });
 
     const request = new XMLHttpRequest();
-    uploadStore.setAbortHandler(() => request.abort());
+    lifecycle?.setAbortHandler?.(() => request.abort());
     request.open("POST", "/api/files/upload");
     request.withCredentials = true;
+    applyCsrfRequestHeader(request, "/api/files/upload", "POST");
     request.upload.onprogress = (event) => {
       if (event.lengthComputable) {
         const effectiveSentBytes = mapMultipartLoadedBytes(event.loaded, event.total, totalBytes);
-        uploadStore.applyAggregateProgress(effectiveSentBytes, totalBytes);
+        lifecycle?.applyAggregateProgress?.(effectiveSentBytes, totalBytes);
         payload.onProgress?.(effectiveSentBytes, totalBytes);
       }
     };
@@ -1211,41 +1402,41 @@ function uploadFilesMultipart(payload: {
       if (request.status >= 200 && request.status < 300) {
         try {
           const parsed = JSON.parse(request.responseText) as UploadFilesResult;
-          uploadStore.markBatchDone();
-          uploadStore.setAbortHandler(null);
+          lifecycle?.markBatchDone?.();
+          lifecycle?.setAbortHandler?.(null);
           resolve(parsed);
         } catch (error) {
-          uploadStore.markFailedAt(uploadStore.sentBytes);
-          uploadStore.setAbortHandler(null);
+          lifecycle?.markFailedAt?.(lifecycle?.sentBytes?.());
+          lifecycle?.setAbortHandler?.(null);
           reject(error);
         }
         return;
       }
       try {
         const parsed = JSON.parse(request.responseText) as { error?: { message?: string } };
-        uploadStore.markFailedAt(uploadStore.sentBytes);
-        uploadStore.setAbortHandler(null);
+        lifecycle?.markFailedAt?.(lifecycle?.sentBytes?.());
+        lifecycle?.setAbortHandler?.(null);
         reject(new Error(parsed.error?.message ?? "上传失败"));
       } catch (error) {
-        uploadStore.markFailedAt(uploadStore.sentBytes);
-        uploadStore.setAbortHandler(null);
+        lifecycle?.markFailedAt?.(lifecycle?.sentBytes?.());
+        lifecycle?.setAbortHandler?.(null);
         reject(error);
       }
     };
     request.onerror = () => {
-      if (uploadStore.abortRequested) {
-        uploadStore.markBatchAborted();
-        uploadStore.setAbortHandler(null);
+      if (lifecycle?.isAbortRequested?.()) {
+        lifecycle?.markBatchAborted?.();
+        lifecycle?.setAbortHandler?.(null);
         reject(new Error("上传已中止"));
         return;
       }
-      uploadStore.markFailedAt(uploadStore.sentBytes);
-      uploadStore.setAbortHandler(null);
+      lifecycle?.markFailedAt?.(lifecycle?.sentBytes?.());
+      lifecycle?.setAbortHandler?.(null);
       reject(new Error("上传失败"));
     };
     request.onabort = () => {
-      uploadStore.markBatchAborted();
-      uploadStore.setAbortHandler(null);
+      lifecycle?.markBatchAborted?.();
+      lifecycle?.setAbortHandler?.(null);
       reject(new Error("上传已中止"));
     };
     request.send(formData);

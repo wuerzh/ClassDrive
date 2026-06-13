@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { api, type SystemSettings } from "@/api/client";
 
-type SystemSettingsInput = Pick<SystemSettings, "uploadPanelEnabled"> & Partial<Pick<SystemSettings, "singleAccountLoginEnabled" | "serverPort" | "serverHost">>;
+type SystemSettingsInput = Pick<SystemSettings, "uploadPanelEnabled"> & Partial<Pick<SystemSettings, "singleAccountLoginEnabled" | "serverPort" | "serverHost" | "defaultShareExpiresDays">>;
 
 function cloneSystemSettings(settings: SystemSettingsInput): SystemSettings {
   return {
@@ -9,6 +9,7 @@ function cloneSystemSettings(settings: SystemSettingsInput): SystemSettings {
     singleAccountLoginEnabled: settings.singleAccountLoginEnabled ?? true,
     serverPort: settings.serverPort ?? "80",
     serverHost: settings.serverHost ?? "",
+    defaultShareExpiresDays: settings.defaultShareExpiresDays ?? 7,
   };
 }
 
@@ -38,7 +39,7 @@ export const useSystemSettingsStore = defineStore("system-settings", {
         this.loading = false;
       }
     },
-    async save(payload: Pick<SystemSettings, "uploadPanelEnabled" | "singleAccountLoginEnabled" | "serverPort">) {
+    async save(payload: Pick<SystemSettings, "uploadPanelEnabled" | "singleAccountLoginEnabled" | "serverPort" | "defaultShareExpiresDays">) {
       const response = await api.updateSystemSettings(payload);
       this.apply(response.settings);
       return this.settings;

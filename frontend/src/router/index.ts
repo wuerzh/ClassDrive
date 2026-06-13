@@ -18,6 +18,7 @@ import StudentAssignmentsView from "@/views/StudentAssignmentsView.vue";
 import StudentAssignmentDetailView from "@/views/StudentAssignmentDetailView.vue";
 import StudentChangePasswordView from "@/views/StudentChangePasswordView.vue";
 import StudentFilesView from "@/views/StudentFilesView.vue";
+import ShareView from "@/views/ShareView.vue";
 import ShellLayout from "@/layouts/ShellLayout.vue";
 import StudentLayout from "@/layouts/StudentLayout.vue";
 
@@ -50,6 +51,15 @@ export function createAppRouter(pinia?: Pinia) {
         meta: {
           public: true,
           title: "学生激活",
+        },
+      },
+      {
+        path: "/share/:token",
+        name: "share",
+        component: ShareView,
+        meta: {
+          public: true,
+          title: "查看分享",
         },
       },
       {
