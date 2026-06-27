@@ -56,7 +56,7 @@
                     type="button"
                     class="button button--sm"
                     :data-testid="`share-copy-${share.id}`"
-                    @click="handleCopy(share)"
+                    @click.stop="handleCopy(share)"
                   >
                     复制
                   </button>

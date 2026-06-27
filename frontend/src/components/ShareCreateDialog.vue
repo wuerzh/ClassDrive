@@ -105,7 +105,7 @@
             type="button"
             class="button button--primary"
             data-testid="share-copy-btn"
-            @click="handleCopy"
+            @click.stop="handleCopy"
           >
             复制分享信息
           </button>
